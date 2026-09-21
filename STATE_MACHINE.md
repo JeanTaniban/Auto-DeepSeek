@@ -1,0 +1,241 @@
+# Machine d’état — Clipboard Agent Relay V2.12
+
+Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.12 distingue la machine d’état du **relais LLM** de la durée de vie persistante d’une **TestSession**.
+
+## 1. Fenêtres et workspaces
+
+Trois identités Windows sont utilisées, toujours sous forme de HWND précis :
+
+- `RELAY_WINDOW` : fenêtre Clipboard Agent Relay ;
+- `LLM_WINDOW` : fenêtre du chat Web sélectionnée au démarrage Auto ;
+- `TARGET_WINDOW` : fenêtre appartenant au processus de TestSession/Target App.
+
+Au démarrage Auto, Windows `EnumWindows` fournit le Z-order. Le Relay choisit la première fenêtre utilisateur exploitable située sous `RELAY_WINDOW`, en excluant son propre PID. Les points Prompt et Envoyer doivent tous deux appartenir à cette fenêtre ; sinon Auto refuse de démarrer.
+
+Deux workspaces sont ensuite déterministes :
+
+```text
+LLM_WORKSPACE
+  LLM_WINDOW : foreground
+  RELAY_WINDOW : visible/topmost sans activation
+
+TARGET_WORKSPACE
+  TARGET_WINDOW : foreground
+  LLM_WINDOW + RELAY_WINDOW : derrière
+```
+
+Le Relay ne cherche plus « Chrome » ou « DeepSeek » par nom. Le HWND lié reste la référence pendant la session Auto. Avant toute saisie/clic navigateur ou Target, le foreground est vérifié/restauré.
+
+## 2. États Agent Auto
+
+- `OFF`
+- `STARTING`
+- `SYNCING_EXISTING_REPLY`
+- `WAITING_INITIAL_CLIPBOARD`
+- `PROCESSING_INITIAL_REPLY`
+- `RECOVERING_LAST_RESULT`
+- `EXECUTING`
+- `TARGET_STARTING` / `TARGET_RUNNING` / `TARGET_RESTORING` : ancien `#Multiple` temporaire avec `Launch:`
+- `TEST_OPENING` : ouverture d’une TestSession persistante
+- `TEST_ACTING` : actions sur la TestSession persistante
+- `TEST_RESTORING` : retour du workspace Target vers le LLM
+- `TEST_CLOSING` : fermeture explicite de la TestSession
+- `SENDING`
+- `WAITING_VISUAL`
+- `WAITING_CLIPBOARD`
+- `PROCESSING_REPLY`
+- `PAUSED`
+
+`PAUSED` ne reprend jamais automatiquement : il faut arrêter puis redémarrer Agent Auto.
+
+## 3. Démarrage Auto
+
+```text
+OFF
+ ↓
+STARTING
+ ├─ validation setup / écran / template
+ ├─ snapshot Z-order
+ ├─ liaison RELAY_WINDOW + LLM_WINDOW
+ ├─ validation Prompt/Envoyer ∈ LLM_WINDOW
+ └─ installation hook souris
+ ↓
+SYNCING_EXISTING_REPLY
+ ↓ stabilité de la réponse déjà affichée
+WAITING_INITIAL_CLIPBOARD
+ ↓ clic Copier
+PROCESSING_INITIAL_REPLY
+```
+
+La première action Auto **n’envoie rien**. Elle récupère la dernière directive déjà visible du LLM.
+
+Si cette directive a déjà été traitée et que son ID/type correspondent exactement au dernier résultat local :
+
+```text
+PROCESSING_INITIAL_REPLY
+ ↓
+RECOVERING_LAST_RESULT
+ ↓ aucun replay de la commande/action
+SENDING
+```
+
+Cette récupération couvre `#Execution`, le `#Multiple` temporaire, `#OpenTestSession`, `#TestActions` et `#CloseTestSession`.
+
+## 4. Cycle normal LLM
+
+```text
+SENDING
+ ↓ texte (+ image éventuelle) vers LLM_WINDOW
+WAITING_VISUAL
+ ↓ mouvement puis stabilité
+WAITING_CLIPBOARD
+ ↓ Copier détecté visuellement
+PROCESSING_REPLY
+ ↓ directive suivante
+```
+
+Les délais d’UI configurables sont séquentiels : résultat→prompt, prompt→collage, collage→Envoyer, Envoyer→surveillance, stabilité→Copier. Les timeouts et durées de stabilité ne sont pas randomisés.
+
+## 5. `#Execution`
+
+```text
+PROCESSING_*
+ ↓
+EXECUTING
+ ↓ #ExecutionResult réel
+SENDING
+```
+
+Une commande sensible passe à `PAUSED`; une commande bloquée provoque `OFF`.
+
+## 6. TestSession persistante
+
+Machine de durée de vie interne (`clipboard_agent/test_session.py`) :
+
+```text
+CLOSED
+ ↓ #OpenTestSession
+OPENING
+ ↓ fenêtre + readiness
+ACTIVE_FOREGROUND
+ ↓ restauration LLM
+ACTIVE_BACKGROUND
+ ↕ #TestActions / action unitaire / #Multiple sans Launch
+ACTIVE_FOREGROUND
+ ↓ restauration LLM
+ACTIVE_BACKGROUND
+ ↓ #CloseTestSession
+CLOSING
+ ↓
+CLOSED
+```
+
+`LOST` indique que le processus ou sa fenêtre a disparu de manière inattendue.
+
+### 6.1 Ouvrir
+
+```text
+PROCESSING_*
+ ↓ #OpenTestSession
+TEST_OPENING
+ ├─ launch avec stdout/stderr capturés
+ ├─ détection fenêtre appartenant au PID ou descendants
+ ├─ TARGET_WORKSPACE
+ ├─ readiness
+ ├─ actions initiales optionnelles
+ └─ capture(s) optionnelle(s)
+ ↓
+TEST_RESTORING
+ ↓ LLM_WORKSPACE vérifié
+SENDING  (#TestSessionResult Operation: OPENED)
+```
+
+Le processus reste ouvert après le résultat si `SessionActive: YES`.
+
+Readiness :
+
+- `Ready: window` : fenêtre exploitable trouvée ;
+- `Ready: delay:<ms>` : fenêtre trouvée puis délai explicite ;
+- `Ready: auto` : fenêtre trouvée puis rendu client visuellement stable ;
+- `Ready: checkpoint:<nom>` : attend `[[CAR_CHECKPOINT:<nom>]]` dans stdout puis exige une stabilité visuelle.
+
+Un settle configurable après activation absorbe la latence focus/peinture avant la vérification.
+
+### 6.2 Agir/observer
+
+```text
+PROCESSING_REPLY
+ ↓ #TestActions / action unitaire / #Multiple sans Launch
+TEST_ACTING
+ ↓ TARGET_WORKSPACE
+[Click / TypeInput / Key / Wait / Observe] × N
+ ↓
+TEST_RESTORING
+ ↓ LLM_WORKSPACE vérifié
+SENDING (#TestSessionResult Operation: ACTIONS)
+```
+
+`#Observe` ne redonne pas la main au LLM au milieu d’une séquence. Pour raisonner sur une image : terminer la séquence par `#Observe`, attendre le retour, puis envoyer une nouvelle directive.
+
+### 6.3 Fermer
+
+```text
+PROCESSING_REPLY
+ ↓ #CloseTestSession
+TEST_CLOSING
+ ├─ fermeture fenêtre
+ ├─ terminaison arbre si nécessaire
+ ├─ stdout/stderr complets
+ └─ restauration LLM_WORKSPACE
+ ↓
+SENDING (#TestSessionResult Operation: CLOSED)
+```
+
+## 7. Checkpoints stdout
+
+Le logiciel surveille stdout pendant toute la TestSession :
+
+```text
+[[CAR_CHECKPOINT:main-window-ready]]
+[[CAR_SCREENSHOT:menu-open]]
+```
+
+Le premier peut servir à `Ready: checkpoint:main-window-ready`. Le second programme une capture au prochain point d’interaction/readiness où la Target App peut être observée en sécurité.
+
+## 8. `#Multiple` temporaire rétrocompatible
+
+`#Multiple` **avec `Launch:`** conserve le comportement V2.11 :
+
+```text
+PROCESSING_*
+ → TARGET_STARTING
+ → TARGET_RUNNING
+ → TARGET_RESTORING
+ → SENDING
+```
+
+Il lance, agit, observe, ferme puis restitue. Un `#Multiple` **sans `Launch:`** est désormais un alias de `#TestActions` et exige une TestSession déjà ouverte.
+
+## 9. Priorité utilisateur et fail-safe
+
+Depuis tout état actif :
+
+```text
+mouvement souris physique
+ → annuler timers/actions restantes
+ → PAUSED
+ → aucun clic navigateur tardif
+```
+
+Pendant une interaction Target/TestSession, le drapeau d’intervention reste persistant jusqu’à la fin du worker. L’application cible est laissée à l’utilisateur si celui-ci reprend la main.
+
+Autres invariants :
+
+- une action Target n’est jamais dirigée vers un HWND arbitraire fourni par le LLM ;
+- `TARGET_WINDOW` doit appartenir au processus lancé ou à un descendant ;
+- les clics Target sont relatifs à la zone cliente ;
+- raccourcis Windows globaux interdits ;
+- restauration LLM impossible → aucun clic/paste navigateur ;
+- copie invalide/inchangée non justifiée → arrêt Auto ;
+- nouvelle directive dupliquée en cycle normal → arrêt fail-safe ;
+- reprise d’un dernier résultat uniquement au démarrage Auto avec ID + type exacts.

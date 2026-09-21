@@ -1,0 +1,6 @@
+# Runtime
+opencv-python-headless>=4.10,<5
+psutil>=6,<8
+
+# Development / tests
+pytest>=8.0

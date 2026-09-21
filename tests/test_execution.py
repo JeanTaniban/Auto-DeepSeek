@@ -1,0 +1,42 @@
+import threading
+from pathlib import Path
+
+from clipboard_agent.execution import ExecutionManager
+from clipboard_agent.models import ExecutionRequest, ExecutionStatus
+
+
+def wait_run(req: ExecutionRequest, cwd: Path):
+    manager = ExecutionManager()
+    done = threading.Event()
+    holder = {}
+    manager.execute_async(req, cwd, lambda *_: None, lambda result: (holder.setdefault("result", result), done.set()))
+    assert done.wait(10)
+    return holder["result"]
+
+
+def test_execution_success(tmp_path: Path):
+    req = ExecutionRequest(command="python -c \"print('ok')\"", shell="bash", timeout=5, request_id="t1")
+    result = wait_run(req, tmp_path)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert "ok" in result.stdout
+
+
+def test_execution_error(tmp_path: Path):
+    req = ExecutionRequest(command="python -c \"import sys; sys.exit(7)\"", shell="bash", timeout=5, request_id="t2")
+    result = wait_run(req, tmp_path)
+    assert result.status == ExecutionStatus.ERROR
+    assert result.exit_code == 7
+
+
+def test_execution_timeout(tmp_path: Path):
+    req = ExecutionRequest(command="python -c \"import time; time.sleep(2)\"", shell="bash", timeout=1, request_id="t3")
+    result = wait_run(req, tmp_path)
+    assert result.status == ExecutionStatus.TIMEOUT
+
+
+def test_interactive_invocation_keeps_powershell_open():
+    manager = ExecutionManager()
+    req = ExecutionRequest(command="Write-Host hello", shell="powershell", timeout=5, request_id="show")
+    invocation = manager._build_invocation(req, interactive=True)
+    assert "-NoExit" in invocation
+    assert "-Command" in invocation
