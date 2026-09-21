@@ -1,3 +1,4 @@
+import os
 import threading
 from pathlib import Path
 
@@ -15,21 +16,21 @@ def wait_run(req: ExecutionRequest, cwd: Path):
 
 
 def test_execution_success(tmp_path: Path):
-    req = ExecutionRequest(command="python -c \"print('ok')\"", shell="bash", timeout=5, request_id="t1")
+    req = ExecutionRequest(command="python -c \"print('ok')\"", shell="cmd" if os.name == "nt" else "bash", timeout=5, request_id="t1")
     result = wait_run(req, tmp_path)
     assert result.status == ExecutionStatus.SUCCESS
     assert "ok" in result.stdout
 
 
 def test_execution_error(tmp_path: Path):
-    req = ExecutionRequest(command="python -c \"import sys; sys.exit(7)\"", shell="bash", timeout=5, request_id="t2")
+    req = ExecutionRequest(command="python -c \"import sys; sys.exit(7)\"", shell="cmd" if os.name == "nt" else "bash", timeout=5, request_id="t2")
     result = wait_run(req, tmp_path)
     assert result.status == ExecutionStatus.ERROR
     assert result.exit_code == 7
 
 
 def test_execution_timeout(tmp_path: Path):
-    req = ExecutionRequest(command="python -c \"import time; time.sleep(2)\"", shell="bash", timeout=1, request_id="t3")
+    req = ExecutionRequest(command="python -c \"import time; time.sleep(2)\"", shell="cmd" if os.name == "nt" else "bash", timeout=1, request_id="t3")
     result = wait_run(req, tmp_path)
     assert result.status == ExecutionStatus.TIMEOUT
 

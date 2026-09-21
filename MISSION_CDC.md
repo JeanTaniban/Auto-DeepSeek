@@ -114,3 +114,9 @@ PROCESSING_REPLY
 - Scripts Bash : syntaxe OK.
 - Démarrage Tk sous Xvfb : OK.
 - Limite : Win32 physique (SendInput/hook/GDI/Z-order interactif) à valider sur le PC Windows utilisateur.
+
+## Correction CI Windows — livraison V2.12
+- Le premier passage GitHub Actions a révélé que `tests/test_execution.py` imposait `shell="bash"` sur Windows ; le runner résolvait alors `bash.exe` vers le lanceur WSL sans distribution installée.
+- Le test d’intégration d’`ExecutionManager` utilise désormais le shell natif de la plateforme : `cmd` sous Windows, `bash` sur Unix.
+- Le comportement runtime reste inchangé : l’application choisit déjà `powershell` sous Windows et `bash` ailleurs.
+- Critère de livraison ajouté : matrice GitHub Actions Ubuntu/Windows × Python 3.11/3.12 entièrement verte.
