@@ -120,3 +120,4 @@ PROCESSING_REPLY
 - Le test d’intégration d’`ExecutionManager` utilise désormais le shell runtime de la plateforme : `powershell` sous Windows, `bash` sur Unix.
 - Le comportement runtime reste inchangé : l’application choisit déjà `powershell` sous Windows et `bash` ailleurs.
 - Critère de livraison ajouté : matrice GitHub Actions Ubuntu/Windows × Python 3.11/3.12 entièrement verte.
+- Le CI Windows a également exposé que PowerShell ne retransmettait pas automatiquement le code de sortie d’un exécutable natif ; l’invocation non interactive propage désormais `$LASTEXITCODE` afin que `#ExecutionResult` conserve le code exact.

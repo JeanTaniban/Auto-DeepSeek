@@ -72,9 +72,16 @@ class ExecutionManager:
                 flags = [exe, "-NoLogo", "-NoProfile"]
                 if interactive:
                     flags.append("-NoExit")
+                    command = request.command
                 else:
                     flags.append("-NonInteractive")
-                return [*flags, "-Command", request.command]
+                    command = (
+                        f"& {{ {request.command} }}; "
+                        "$carSuccess = $?; $carExitCode = $LASTEXITCODE; "
+                        "if ($null -ne $carExitCode) { exit $carExitCode } "
+                        "elseif (-not $carSuccess) { exit 1 } else { exit 0 }"
+                    )
+                return [*flags, "-Command", command]
             if shell in {"cmd", "cmd.exe"}:
                 return ["cmd.exe", "/d", "/s", "/k" if interactive else "/c", request.command]
             return [shell, "-c", request.command]
@@ -82,9 +89,16 @@ class ExecutionManager:
             flags = ["pwsh", "-NoLogo", "-NoProfile"]
             if interactive:
                 flags.append("-NoExit")
+                command = request.command
             else:
                 flags.append("-NonInteractive")
-            return [*flags, "-Command", request.command]
+                command = (
+                    f"& {{ {request.command} }}; "
+                    "$carSuccess = $?; $carExitCode = $LASTEXITCODE; "
+                    "if ($null -ne $carExitCode) { exit $carExitCode } "
+                    "elseif (-not $carSuccess) { exit 1 } else { exit 0 }"
+                )
+            return [*flags, "-Command", command]
         if shell in {"bash", "sh", "zsh"}:
             return [shell, "-lc", request.command]
         return [shell, "-c", request.command]

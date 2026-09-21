@@ -35,9 +35,22 @@ def test_execution_timeout(tmp_path: Path):
     assert result.status == ExecutionStatus.TIMEOUT
 
 
+def test_noninteractive_powershell_propagates_native_exit_code():
+    manager = ExecutionManager()
+    req = ExecutionRequest(command="python -c \"import sys; sys.exit(7)\"", shell="powershell", timeout=5, request_id="exit")
+    invocation = manager._build_invocation(req, interactive=False)
+    command = invocation[invocation.index("-Command") + 1]
+    assert "$carSuccess = $?" in command
+    assert "$carExitCode = $LASTEXITCODE" in command
+    assert "exit $carExitCode" in command
+
+
 def test_interactive_invocation_keeps_powershell_open():
     manager = ExecutionManager()
     req = ExecutionRequest(command="Write-Host hello", shell="powershell", timeout=5, request_id="show")
     invocation = manager._build_invocation(req, interactive=True)
     assert "-NoExit" in invocation
     assert "-Command" in invocation
+    command = invocation[invocation.index("-Command") + 1]
+    assert command == "Write-Host hello"
+    assert "$carExitCode" not in command
