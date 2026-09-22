@@ -32,12 +32,12 @@ def test_unknown_non_bgra_signature_is_not_misclassified_as_black():
 
 def test_capture_window_client_prefers_more_informative_printwindow_fallback(monkeypatch):
     desktop = Win32DesktopInput()
-    black = ScreenFrame(16, 12, _solid_bgra(16, 12, 0, 0, 0))
-    rendered = ScreenFrame(16, 12, _solid_bgra(16, 12, 40, 80, 120))
+    black = ScreenFrame(32, 24, _solid_bgra(32, 24, 0, 0, 0))
+    rendered = ScreenFrame(32, 24, _solid_bgra(32, 24, 40, 80, 120))
 
     monkeypatch.setattr(desktop, "_require_windows", lambda: None)
     monkeypatch.setattr(desktop, "activate_window", lambda _hwnd: None)
-    monkeypatch.setattr(desktop, "client_rect_screen", lambda _hwnd: ScreenRect(0, 0, 16, 12))
+    monkeypatch.setattr(desktop, "client_rect_screen", lambda _hwnd: ScreenRect(0, 0, 32, 24))
     monkeypatch.setattr(desktop, "capture_frame", lambda _rect: black)
     monkeypatch.setattr(
         desktop,
@@ -50,12 +50,12 @@ def test_capture_window_client_prefers_more_informative_printwindow_fallback(mon
 
 def test_capture_window_client_keeps_visible_capture_when_it_is_already_valid(monkeypatch):
     desktop = Win32DesktopInput()
-    visible = ScreenFrame(16, 12, _solid_bgra(16, 12, 30, 50, 70))
+    visible = ScreenFrame(32, 24, _solid_bgra(32, 24, 30, 50, 70))
     fallback_called = []
 
     monkeypatch.setattr(desktop, "_require_windows", lambda: None)
     monkeypatch.setattr(desktop, "activate_window", lambda _hwnd: None)
-    monkeypatch.setattr(desktop, "client_rect_screen", lambda _hwnd: ScreenRect(0, 0, 16, 12))
+    monkeypatch.setattr(desktop, "client_rect_screen", lambda _hwnd: ScreenRect(0, 0, 32, 24))
     monkeypatch.setattr(desktop, "capture_frame", lambda _rect: visible)
     monkeypatch.setattr(
         desktop,
