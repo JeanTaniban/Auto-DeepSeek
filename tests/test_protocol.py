@@ -337,3 +337,150 @@ def test_open_test_session_ready_modes_are_validated():
         assert directive.ready == ready
     with pytest.raises(ProtocolError, match="Ready invalide"):
         parse_agent_directive("#OpenTestSession\nID: x\nLaunch: app.exe\nReady: magic\n")
+
+
+def test_parse_relay_v2_execution_and_show():
+    from clipboard_agent.models import DirectiveKind
+    from clipboard_agent.protocol import parse_agent_directive
+
+    execution = parse_agent_directive("""#Relay
+Protocol: 2
+Action: EXECUTION
+ID: inspect-v2
+Shell: powershell
+CWD: .
+Timeout: 45
+
+git status --short
+""")
+    assert execution is not None
+    assert execution.kind == DirectiveKind.EXECUTION
+    assert execution.request is not None
+    assert execution.request.request_id == "inspect-v2"
+    assert execution.request.command == "git status --short"
+
+    show = parse_agent_directive("""#Relay
+Protocol: 2
+Action: SHOW
+ID: show-v2
+CWD: .
+
+python main.py
+""")
+    assert show is not None
+    assert show.kind == DirectiveKind.SHOW
+    assert show.request is not None
+    assert show.request.command == "python main.py"
+
+
+def test_parse_relay_v2_test_session_actions_close_temp_and_end():
+    from clipboard_agent.models import DirectiveKind, InteractionKind
+    from clipboard_agent.protocol import parse_agent_directive
+
+    opened = parse_agent_directive("""#Relay
+Protocol: 2
+Action: OPEN_TEST_SESSION
+ID: open-v2
+Shell: powershell
+CWD: .
+Timeout: 120
+Launch: python main.py
+Ready: content
+
+#Observe startup
+""")
+    assert opened is not None
+    assert opened.kind == DirectiveKind.OPEN_TEST_SESSION
+    assert opened.ready == "content"
+    assert opened.request is not None
+    assert opened.request.command == "python main.py"
+    assert opened.actions[0].kind == InteractionKind.OBSERVE
+
+    actions = parse_agent_directive("""#Relay
+Protocol: 2
+Action: TEST_ACTIONS
+ID: act-v2
+
+#Click 20;30
+#Observe after
+""")
+    assert actions is not None
+    assert actions.kind == DirectiveKind.TEST_ACTIONS
+    assert actions.request_id == "act-v2"
+    assert [a.kind for a in actions.actions] == [InteractionKind.CLICK, InteractionKind.OBSERVE]
+
+    closed = parse_agent_directive("""#Relay
+Protocol: 2
+Action: CLOSE_TEST_SESSION
+ID: close-v2
+""")
+    assert closed is not None
+    assert closed.kind == DirectiveKind.CLOSE_TEST_SESSION
+    assert closed.request_id == "close-v2"
+
+    temporary = parse_agent_directive("""#Relay
+Protocol: 2
+Action: TEMP_TEST
+ID: temp-v2
+CWD: .
+Launch: python main.py
+
+#Observe once
+""")
+    assert temporary is not None
+    assert temporary.kind == DirectiveKind.MULTIPLE
+    assert temporary.request is not None
+    assert temporary.request.command == "python main.py"
+
+    ended = parse_agent_directive("""#Relay
+Protocol: 2
+Action: END
+ID: end-v2
+
+Mission validée.
+""")
+    assert ended is not None
+    assert ended.kind == DirectiveKind.END
+    assert ended.request_id == "end-v2"
+    assert ended.summary == "Mission validée."
+
+
+def test_relay_v2_strict_validation_and_prose_safety():
+    from clipboard_agent.protocol import parse_agent_directive
+
+    assert parse_agent_directive("Le marqueur suivant est seulement cité :\n#Relay\nmais sans bloc canonique.") is None
+
+    with pytest.raises(ProtocolError, match="Protocol: 2"):
+        parse_agent_directive("#Relay\nProtocol: 1\nAction: END\nID: x\n")
+
+    with pytest.raises(ProtocolError, match="Action #Relay inconnue"):
+        parse_agent_directive("#Relay\nProtocol: 2\nAction: MAGIC\nID: x\n")
+
+    with pytest.raises(ProtocolError, match="Métadonnée"):
+        parse_agent_directive("#Relay\nProtocol: 2\nAction: TEST_ACTIONS\nID: x\nCWD: .\n\n#Observe")
+
+    with pytest.raises(ProtocolError, match="ID"):
+        parse_agent_directive("#Relay\nProtocol: 2\nAction: END\n")
+
+
+def test_parse_execution_accepts_relay_v2_execution():
+    req = parse_execution("""#Relay
+Protocol: 2
+Action: EXECUTION
+ID: exec-v2
+CWD: .
+
+pwd
+""", default_shell="bash")
+    assert req is not None
+    assert req.request_id == "exec-v2"
+    assert req.shell == "bash"
+    assert req.command == "pwd"
+
+
+def test_execution_result_has_common_relay_v2_header():
+    result = ExecutionResult("x2", ExecutionStatus.SUCCESS, 0, 0.1, Path("."), "ok", "", "echo ok")
+    text = format_result(result)
+    assert text.startswith("#RelayResult\nProtocol: 2\nKind: EXECUTION")
+    assert "LegacyMarker: #ExecutionResult" in text
+    assert "Status: SUCCESS" in text
