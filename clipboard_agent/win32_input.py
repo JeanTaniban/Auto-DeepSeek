@@ -928,6 +928,14 @@ class Win32DesktopInput:
                 f"Impossible de placer la fenêtre cible au premier plan (cible={int(hwnd)}, foreground={actual})."
             )
 
+    def raise_window(self, hwnd: int) -> None:
+        """Raise an existing top-level window without moving or resizing it."""
+        self._require_windows()
+        if not self.window_exists(hwnd):
+            raise DesktopAutomationUnavailable("La fenêtre cible n'existe plus.")
+        if not user32.BringWindowToTop(wintypes.HWND(int(hwnd))):
+            raise DesktopAutomationUnavailable("Impossible de remonter la fenêtre cible dans le Z-order.")
+
     def restore_window(self, snapshot: WindowSnapshot | None) -> bool:
         self._require_windows()
         if snapshot is None or not self.window_exists(snapshot.hwnd):
