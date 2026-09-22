@@ -161,7 +161,9 @@ def test_observation_sheet_and_result_text():
         browser_restored=True,
     )
     text = format_multiple_result(result, "goal")
-    assert "#MultipleResult" in text
+    assert text.startswith("#RelayResult\nProtocol: 2\nKind: TEMP_TEST")
+    assert "LegacyMarker: #MultipleResult" in text
+    assert "RecommendedNext: EXECUTION,OPEN_TEST_SESSION,SHOW,END" in text
     assert "Observations: 1" in text
     assert "#VisualObservation" in text
     assert "#GoalReminder" in text
