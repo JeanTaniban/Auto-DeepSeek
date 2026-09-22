@@ -65,6 +65,58 @@ class ScreenFrame:
     pixels: bytes  # top-down BGRA
 
 
+def bgra_non_dark_ratio(
+    pixels: bytes,
+    *,
+    dark_threshold: int = 10,
+    max_samples: int = 4096,
+) -> float:
+    """Return the sampled fraction of BGRA pixels that are visibly non-dark.
+
+    This intentionally detects only *near black* frames. A dark game scene with
+    even a small HUD remains usable; an all-zero/near-zero capture from a
+    not-yet-rendered or unsupported surface is classified as suspicious.
+    Invalid non-empty buffers are treated as unknown/non-black so callers never
+    reject an observation merely because a test/backend uses another signature
+    representation.
+    """
+    if not pixels:
+        return 0.0
+    if len(pixels) % 4:
+        return 1.0
+    threshold = max(0, min(255, int(dark_threshold)))
+    total_pixels = len(pixels) // 4
+    step = max(1, total_pixels // max(1, int(max_samples)))
+    samples = 0
+    non_dark = 0
+    view = memoryview(pixels)
+    for pixel_index in range(0, total_pixels, step):
+        offset = pixel_index * 4
+        samples += 1
+        if (
+            view[offset] > threshold
+            or view[offset + 1] > threshold
+            or view[offset + 2] > threshold
+        ):
+            non_dark += 1
+    return non_dark / max(1, samples)
+
+
+def bgra_is_likely_black(
+    pixels: bytes,
+    *,
+    dark_threshold: int = 10,
+    max_non_dark_ratio: float = 0.003,
+) -> bool:
+    """Conservatively flag a BGRA capture that is almost entirely black."""
+    if not pixels or len(pixels) % 4:
+        return False
+    return bgra_non_dark_ratio(
+        pixels,
+        dark_threshold=dark_threshold,
+    ) <= max(0.0, min(1.0, float(max_non_dark_ratio)))
+
+
 @dataclass(frozen=True, slots=True)
 class WindowInfo:
     hwnd: int
@@ -221,6 +273,8 @@ if os.name == "nt":
     CF_DIB = 8
     GMEM_MOVEABLE = 0x0002
     GA_ROOT = 2
+    PW_CLIENTONLY = 0x00000001
+    PW_RENDERFULLCONTENT = 0x00000002
 
     user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
     user32.SendInput.restype = wintypes.UINT
@@ -250,6 +304,8 @@ if os.name == "nt":
     user32.GetAncestor.restype = wintypes.HWND
     user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
     user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.PrintWindow.argtypes = (wintypes.HWND, wintypes.HDC, wintypes.UINT)
+    user32.PrintWindow.restype = wintypes.BOOL
     user32.BringWindowToTop.argtypes = (wintypes.HWND,)
     user32.BringWindowToTop.restype = wintypes.BOOL
     user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
@@ -985,13 +1041,82 @@ class Win32DesktopInput:
         up = [self._keyboard_input(vk, KEYEVENTF_KEYUP) for vk in reversed(vks)]
         self._send_inputs([*down, *up])
 
+    def _capture_printwindow_client(self, hwnd: int, width: int, height: int) -> ScreenFrame | None:
+        """Best-effort Win32 fallback for a client surface that screen BitBlt sees as black.
+
+        PrintWindow asks the target to render its client into our memory DC. It
+        is not guaranteed for every GPU surface, therefore failure simply
+        returns None and the visible-screen capture remains authoritative.
+        """
+        self._require_windows()
+        if width <= 0 or height <= 0 or not self.window_exists(hwnd):
+            return None
+        screen_dc = user32.GetDC(None)
+        if not screen_dc:
+            return None
+        mem_dc = None
+        bitmap = None
+        old_object = None
+        try:
+            mem_dc = gdi32.CreateCompatibleDC(screen_dc)
+            if not mem_dc:
+                return None
+            bitmap = gdi32.CreateCompatibleBitmap(screen_dc, width, height)
+            if not bitmap:
+                return None
+            old_object = gdi32.SelectObject(mem_dc, bitmap)
+            if not user32.PrintWindow(
+                wintypes.HWND(int(hwnd)),
+                mem_dc,
+                PW_CLIENTONLY | PW_RENDERFULLCONTENT,
+            ):
+                return None
+
+            info = BITMAPINFO()
+            info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            info.bmiHeader.biWidth = width
+            info.bmiHeader.biHeight = -height
+            info.bmiHeader.biPlanes = 1
+            info.bmiHeader.biBitCount = 32
+            info.bmiHeader.biCompression = BI_RGB
+            buffer = ctypes.create_string_buffer(width * height * 4)
+            lines = gdi32.GetDIBits(
+                mem_dc, bitmap, 0, height, buffer, ctypes.byref(info), DIB_RGB_COLORS
+            )
+            if lines != height:
+                return None
+            return ScreenFrame(width, height, buffer.raw)
+        finally:
+            if mem_dc and old_object:
+                gdi32.SelectObject(mem_dc, old_object)
+            if bitmap:
+                gdi32.DeleteObject(bitmap)
+            if mem_dc:
+                gdi32.DeleteDC(mem_dc)
+            user32.ReleaseDC(None, screen_dc)
+
     def capture_window_client(self, hwnd: int) -> ScreenFrame:
         self._require_windows()
         self.activate_window(hwnd)
         rect = self.client_rect_screen(hwnd)
         if rect.width < 20 or rect.height < 20:
             raise DesktopAutomationUnavailable("La zone cliente de la cible est trop petite pour #Observe.")
-        return self.capture_frame(rect)
+
+        visible = self.capture_frame(rect)
+        if not bgra_is_likely_black(visible.pixels):
+            return visible
+
+        # Some accelerated/windowed surfaces can transiently appear black in a
+        # screen DC. Try the target-rendered client and keep whichever capture
+        # contains more visible information.
+        try:
+            rendered = self._capture_printwindow_client(hwnd, rect.width, rect.height)
+        except Exception:
+            rendered = None
+        if rendered is not None:
+            if bgra_non_dark_ratio(rendered.pixels) > bgra_non_dark_ratio(visible.pixels):
+                return rendered
+        return visible
 
     def set_clipboard_image_bgr(self, image_bgr) -> None:
         """Place a BGR numpy image on the Windows clipboard as CF_DIB."""
