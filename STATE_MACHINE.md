@@ -1,4 +1,4 @@
-# Machine d’état — Clipboard Agent Relay V2.13
+# Machine d’état — Clipboard Agent Relay V2.14
 
 Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.13 conserve la machine d’état runtime de la V2.12 mais expose au LLM un protocole canonique V2 à enveloppe unique `#Relay`.
 
@@ -20,7 +20,7 @@ LLM_WORKSPACE
   RELAY_WINDOW : visible/topmost sans activation
 
 TARGET_WORKSPACE
-  TARGET_WINDOW : foreground
+  TARGET_WINDOW : foreground + explicitement remontée après démotion topmost du Relay
   LLM_WINDOW + RELAY_WINDOW : derrière
 ```
 
@@ -267,3 +267,11 @@ RecommendedNext: TEST_ACTIONS,CLOSE_TEST_SESSION
 ```
 
 Cette information est descriptive de l’état réel après traitement. Elle évite que l’agent déduise la prochaine transition depuis des notes en prose. `LegacyMarker` n’a aucun rôle dans la machine d’état ; il sert seulement à la compatibilité avec les conversations V1.
+
+
+## 11. Invariants V2.14 — réponse unique et clavier
+
+- Une réponse de contrôle V2 contient uniquement une directive `#Relay` brute ou un unique bloc fenced qui constitue tout le message. Un bloc `#Relay` entouré de prose est rejeté.
+- `#TypeInput` transporte l'Unicode jusqu'à `SendInput(KEYEVENTF_UNICODE)`.
+- Un `#Key` caractère simple non alphabétique passe par `VkKeyScanW` afin de respecter le layout actif (notamment chiffres AZERTY et caractères accentués), avec fallback Unicode si Windows ne fournit aucune combinaison physique.
+- Avant readiness/capture/actions, le workspace Target démote le Relay de topmost puis remonte explicitement la Target, y compris si elle était déjà foreground au lancement.
