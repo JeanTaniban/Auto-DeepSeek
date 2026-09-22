@@ -12,8 +12,7 @@ import psutil
 
 from .execution import ExecutionManager
 from .models import ExecutionRequest, ExecutionStatus, InteractionAction, InteractionKind
-from .target_session import TargetObservation, compose_observation_sheet
-from .visual_match import bgra_bytes_to_bgr
+from .target_session import TargetObservation, capture_target_observation, compose_observation_sheet
 from .visual_watch import VisualStabilityTracker, VisualState
 from .win32_input import DesktopAutomationUnavailable, WindowInfo, Win32DesktopInput
 from .workspace import WindowWorkspaceManager
@@ -376,25 +375,39 @@ class PersistentTestSession:
         elif ready != "window":
             raise DesktopAutomationUnavailable(f"Mode de readiness inconnu : {ready}")
 
-    def _capture_observation(self, target: WindowInfo, label: str, observations: list[TargetObservation]) -> None:
-        frame = self.desktop.capture_window_client(target.hwnd)
-        image = bgra_bytes_to_bgr(frame.pixels, frame.width, frame.height).copy()
+    def _capture_observation(
+        self,
+        target: WindowInfo,
+        label: str,
+        observations: list[TargetObservation],
+        deadline: float | None = None,
+    ) -> None:
         observations.append(
-            TargetObservation(
-                index=len(observations) + 1,
-                label=label or f"observation-{len(observations) + 1}",
-                image_bgr=image,
-                client_width=frame.width,
-                client_height=frame.height,
+            capture_target_observation(
+                self.desktop,
+                target,
+                label or f"observation-{len(observations) + 1}",
+                len(observations) + 1,
+                deadline=deadline,
             )
         )
 
-    def _capture_pending_screenshots(self, target: WindowInfo, observations: list[TargetObservation]) -> None:
+    def _capture_pending_screenshots(
+        self,
+        target: WindowInfo,
+        observations: list[TargetObservation],
+        deadline: float | None = None,
+    ) -> None:
         with self._lock:
             labels = list(self._pending_screenshots)
             self._pending_screenshots.clear()
         for label in labels:
-            self._capture_observation(target, label or "checkpoint-screenshot", observations)
+            self._capture_observation(
+                target,
+                label or "checkpoint-screenshot",
+                observations,
+                deadline,
+            )
 
     def _execute_actions(
         self,
@@ -407,7 +420,7 @@ class PersistentTestSession:
         logs: list[str],
     ) -> int:
         completed = 0
-        self._capture_pending_screenshots(target, observations)
+        self._capture_pending_screenshots(target, observations, deadline)
         for index, action in enumerate(actions, start=1):
             if self._cancel.is_set() or time.monotonic() >= deadline:
                 raise _TestCancelledOrTimeout()
@@ -434,10 +447,10 @@ class PersistentTestSession:
                     raise _TestCancelledOrTimeout()
                 logs.append(f"{index}. WAIT {action.wait_ms} ms OK")
             elif action.kind == InteractionKind.OBSERVE:
-                self._capture_observation(target, action.label, observations)
+                self._capture_observation(target, action.label, observations, deadline)
                 logs.append(f"{index}. OBSERVE {action.label or '<auto>'} OK")
             completed = index
-            self._capture_pending_screenshots(target, observations)
+            self._capture_pending_screenshots(target, observations, deadline)
             if action.kind != InteractionKind.WAIT and action_delay_seconds > 0:
                 if not self._sleep_cancelable(action_delay_seconds, self._cancel, deadline):
                     raise _TestCancelledOrTimeout()
@@ -516,7 +529,7 @@ class PersistentTestSession:
                     visual_poll_ms=visual_poll_ms,
                     settle_seconds=settle_seconds,
                 )
-                self._capture_pending_screenshots(target, observations)
+                self._capture_pending_screenshots(target, observations, deadline)
                 completed = self._execute_actions(
                     target, actions, deadline,
                     action_delay_seconds=action_delay_seconds,
@@ -802,6 +815,10 @@ def format_test_session_result(result: TestSessionResult, goal_reminder: str = "
         "STDERR_DELTA:" if result.operation != "CLOSED" else "STDERR:",
         truncate_output(result.stderr or "", max_output_chars) or "<empty>",
     ]
+    warnings = [obs for obs in result.observations if obs.capture_warning]
+    if warnings:
+        lines += ["", "OBSERVATION_WARNINGS:"]
+        lines += [f"- Observe {obs.index} ({obs.label}): {obs.capture_warning}" for obs in warnings]
     if result.observations:
         lines += [
             "",
