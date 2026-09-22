@@ -164,3 +164,14 @@ Rendre les tests visuels persistants pilotés par l'état réel de la cible plut
 - Une capture toujours noire est signalée explicitement, sans être présentée comme observation fiable.
 - Suite pytest + compileall + matrice GitHub Actions Ubuntu/Windows Python 3.11/3.12 vertes.
 - Validation physique finale à rejouer sur le PC Windows utilisateur avec le jeu de test.
+
+
+### Validation de la mission corrective
+- Détection/capture noire : heuristique BGRA + fallback Win32 `PrintWindow` testés.
+- Observation : retry borné noir→contenu et avertissement persistant-noir testés.
+- Readiness : `auto` valide désormais les UI stables et les rendus dynamiques ; `content` ajouté ; checkpoint ne requiert plus l'immobilité d'un rendu temps réel.
+- Prompt agent : `#Wait` n'est plus recommandé pour deviner startup/rendu ; les mécanismes état/contenu/checkpoint sont explicitement prioritaires.
+- UI : `#OpenTestSession` n'est plus affiché comme `MULTIPLE`.
+- Documentation : README, CDC global et machine d'état alignés.
+- CI d'intégration avant clôture : Ubuntu/Windows × Python 3.11/3.12, étapes compile + pytest toutes vertes.
+- Limite restante : la capture/focus réels d'un jeu accéléré doivent être rejoués sur le bureau Windows interactif utilisateur ; la CI ne peut pas reproduire cette couche graphique physique.
