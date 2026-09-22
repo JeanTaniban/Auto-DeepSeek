@@ -201,6 +201,12 @@ class WindowWorkspaceManager:
             self._set_relay_topmost(False)
             if not self.desktop.is_foreground(target_hwnd):
                 self.desktop.activate_window(target_hwnd)
+            # Important for application startup: a newly launched Target can
+            # already own the foreground while Relay is still topmost. Removing
+            # Relay's topmost flag may leave Relay above that already-foreground
+            # Target in the normal Z-order band. Raise the Target explicitly
+            # after the demotion even when no focus repair was necessary.
+            self.desktop.raise_window(target_hwnd)
             if not self.desktop.is_foreground(target_hwnd):
                 foreground = self.desktop.foreground_window()
                 return self._fail(
