@@ -290,3 +290,14 @@ Rendre les interactions de test plus déterministes :
 - Les accents sont conservés du protocole jusqu'à `SendInput`.
 - Une réponse V2 avec prose hors directive est refusée avec une erreur explicite.
 - Toute la suite existante reste verte sur Ubuntu/Windows Python 3.11/3.12.
+
+
+### Validation — startup Observe, Unicode et unicité des directives
+- Workspace Target : après retrait du topmost Relay, la Target est explicitement remontée dans le Z-order, même si elle était déjà foreground au lancement.
+- Cas reproduit en test : Target déjà foreground + Relay topmost ; aucune activation supplémentaire n'est requise mais le raise est bien effectué avant readiness/capture.
+- `#TypeInput` conserve les accents, symboles et emoji jusqu'à l'injection UTF-16 `KEYEVENTF_UNICODE`.
+- `#Key 1` et les caractères imprimables simples utilisent `VkKeyScanW` selon le layout Windows actif ; `#Key é` est supporté ; les lettres comme `#Key R` restent des touches brutes.
+- Parser V2 : un bloc `#Relay` fenced entouré de prose est désormais rejeté ; seuls la directive brute ou un bloc unique constituant tout le message sont acceptés.
+- Prompt : règle absolue répétée en tête — aucun titre, aucune analyse, aucune phrase avant/après, exactement un `#Relay`.
+- Documentation alignée en V2.14.
+- Validation finale branche : GitHub Actions Ubuntu/Windows × Python 3.11/3.12 entièrement verte.
