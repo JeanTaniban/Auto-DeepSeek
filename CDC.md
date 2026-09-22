@@ -1,6 +1,6 @@
 # Cahier des charges — Auto-DeepSeek / Clipboard Agent Relay
 
-**Version : 2.13**
+**Version : 2.14**
 **Cible principale : Windows 10/11, Python 3.11+**
 
 ## 1. Objectif
@@ -53,7 +53,8 @@ Le point Prompt et le point Envoyer doivent appartenir à `LLM_WINDOW`. Si ce n�
 
 - `TARGET_WINDOW` au foreground ;
 - Relay perd le topmost ;
-- aucune interaction Target si le foreground vérifié n’est pas la cible.
+- après cette démotion, `TARGET_WINDOW` est explicitement remontée dans le Z-order même si elle possédait déjà le foreground ;
+- aucune readiness, capture ou interaction Target si le foreground vérifié n’est pas la cible.
 
 Après interaction, le LLM workspace est restauré et vérifié avant tout clic/paste navigateur.
 
@@ -82,6 +83,7 @@ Une seule directive de contrôle est autorisée par réponse. Le champ `Action` 
 - `END` : fin de mission.
 
 Le parser V2 doit :
+- exiger que la réponse de contrôle soit uniquement la directive brute ou exactement un seul bloc fenced `#Relay`, sans prose avant/après ;
 - exiger `Protocol: 2`, `Action` et un `ID` valide ;
 - rejeter les actions inconnues ;
 - rejeter les métadonnées incompatibles avec l’action ;
@@ -184,6 +186,7 @@ Une variation bornée des délais UI peut être configurée pour absorber des la
 - BLOCKED → refus ;
 - Target limitée au PID lancé/descendants ;
 - raccourcis globaux Windows interdits ;
+- `#TypeInput` conserve l'Unicode complet ; un `#Key` caractère simple utilise le layout clavier Windows actif (avec fallback Unicode lorsque nécessaire) ;
 - aucun HWND arbitraire fourni par le LLM ;
 - impossible de reprendre `PAUSED` automatiquement ;
 - reprise d’une directive déjà traitée uniquement au démarrage Auto avec ID/type exacts ;

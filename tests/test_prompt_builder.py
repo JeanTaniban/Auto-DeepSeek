@@ -16,7 +16,12 @@ def test_prompt_starts_with_goal_environment_and_simple_control_loop():
     prompt = _prompt()
     assert "Ship a stable desktop app" in prompt
     assert "Action dans le tableau" in prompt
-    assert "UN SEUL bloc copiable" in prompt
+    assert "RÈGLE DE FORMAT ABSOLUE" in prompt
+    assert "TA RÉPONSE ENTIÈRE doit être exactement UN SEUL bloc copiable" in prompt
+    assert "RIEN avant le bloc" in prompt
+    assert "RIEN après le bloc" in prompt
+    assert "exactement un `#Relay`" in prompt
+    assert "Relay V2 rejettera volontairement la réponse" in prompt
     assert "Attends le prochain `#RelayResult`" in prompt
     assert "Ne fabrique jamais stdout" in prompt
 
@@ -54,6 +59,9 @@ def test_prompt_explains_persistent_testing_without_guessing_timings():
     assert "N'ajoute pas de `#Wait` « au cas où »" in prompt
     assert "`#Observe label`" in prompt
     assert "ZONE CLIENTE" in prompt
+    assert "saisie Unicode" in prompt
+    assert "`é`, `à`, `ç`" in prompt
+    assert "layout clavier Windows actif" in prompt
 
 
 def test_prompt_explains_result_state_and_recommended_next_action():

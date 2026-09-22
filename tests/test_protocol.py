@@ -486,22 +486,27 @@ def test_execution_result_has_common_relay_v2_header():
     assert "Status: SUCCESS" in text
 
 
-def test_relay_v2_fenced_block_with_intro_is_canonical_and_multiple_blocks_are_rejected():
+def test_relay_v2_fenced_block_must_be_the_entire_message():
     from clipboard_agent.models import DirectiveKind
     from clipboard_agent.protocol import parse_agent_directive
 
     fence = chr(96) * 3
-    text = (
-        "Je vérifie le dépôt.\n\n"
-        + fence + "text\n"
+    exact = (
+        fence + "text\n"
         + "#Relay\nProtocol: 2\nAction: EXECUTION\nID: fenced-v2\nCWD: .\n\ngit status\n"
         + fence
     )
-    directive = parse_agent_directive(text)
+    directive = parse_agent_directive(exact)
     assert directive is not None
     assert directive.kind == DirectiveKind.EXECUTION
     assert directive.request is not None
     assert directive.request.request_id == "fenced-v2"
+
+    with pytest.raises(ProtocolError, match="uniquement le bloc copiable"):
+        parse_agent_directive("Je vérifie le dépôt.\n\n" + exact)
+
+    with pytest.raises(ProtocolError, match="uniquement le bloc copiable"):
+        parse_agent_directive(exact + "\n\nTerminé.")
 
     duplicate = (
         fence + "text\n#Relay\nProtocol: 2\nAction: END\nID: one\n" + fence
@@ -510,3 +515,22 @@ def test_relay_v2_fenced_block_with_intro_is_canonical_and_multiple_blocks_are_r
     )
     with pytest.raises(ProtocolError, match="Plusieurs directives #Relay"):
         parse_agent_directive(duplicate)
+
+
+def test_typeinput_preserves_unicode_and_key_accepts_accented_character():
+    from clipboard_agent.models import InteractionKind
+    from clipboard_agent.protocol import parse_agent_directive
+
+    directive = parse_agent_directive("""#Relay
+Protocol: 2
+Action: TEST_ACTIONS
+ID: unicode-input
+
+#TypeInput "été déjà reçu — 5€ 😀"
+#Key é
+""")
+    assert directive is not None
+    assert directive.actions[0].kind == InteractionKind.TYPE_INPUT
+    assert directive.actions[0].text == "été déjà reçu — 5€ 😀"
+    assert directive.actions[1].kind == InteractionKind.KEY
+    assert directive.actions[1].key == "é"

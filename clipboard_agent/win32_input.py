@@ -298,6 +298,8 @@ if os.name == "nt":
     user32.ReleaseDC.restype = ctypes.c_int
     user32.GetForegroundWindow.argtypes = ()
     user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.VkKeyScanW.argtypes = (ctypes.c_wchar,)
+    user32.VkKeyScanW.restype = ctypes.c_short
     user32.WindowFromPoint.argtypes = (wintypes.POINT,)
     user32.WindowFromPoint.restype = wintypes.HWND
     user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
@@ -928,6 +930,14 @@ class Win32DesktopInput:
                 f"Impossible de placer la fenêtre cible au premier plan (cible={int(hwnd)}, foreground={actual})."
             )
 
+    def raise_window(self, hwnd: int) -> None:
+        """Raise an existing top-level window without moving or resizing it."""
+        self._require_windows()
+        if not self.window_exists(hwnd):
+            raise DesktopAutomationUnavailable("La fenêtre cible n'existe plus.")
+        if not user32.BringWindowToTop(wintypes.HWND(int(hwnd))):
+            raise DesktopAutomationUnavailable("Impossible de remonter la fenêtre cible dans le Z-order.")
+
     def restore_window(self, snapshot: WindowSnapshot | None) -> bool:
         self._require_windows()
         if snapshot is None or not self.window_exists(snapshot.hwnd):
@@ -1031,11 +1041,52 @@ class Win32DesktopInput:
             return 0x70 + int(key[1:]) - 1
         raise DesktopAutomationUnavailable(f"Touche non supportée : {name}")
 
+    def _press_layout_character(self, character: str) -> None:
+        """Press one printable character according to the active Windows layout."""
+        scan = int(user32.VkKeyScanW(character))
+        if scan == -1:
+            # No physical key combination exists in the active layout. Unicode
+            # injection is still preferable to silently dropping the character.
+            self.type_text(character)
+            return
+
+        vk = scan & 0xFF
+        shift_state = (scan >> 8) & 0xFF
+        modifiers: list[int] = []
+        if shift_state & 0x01:
+            modifiers.append(VK_SHIFT)
+        if shift_state & 0x02:
+            modifiers.append(VK_CONTROL)
+        if shift_state & 0x04:
+            modifiers.append(VK_MENU)
+
+        inputs = [self._keyboard_input(mod) for mod in modifiers]
+        inputs.append(self._keyboard_input(vk))
+        inputs.append(self._keyboard_input(vk, KEYEVENTF_KEYUP))
+        inputs.extend(self._keyboard_input(mod, KEYEVENTF_KEYUP) for mod in reversed(modifiers))
+        self._send_inputs(inputs)
+
     def press_key_chord(self, chord: str) -> None:
         self._require_windows()
-        parts = [part.strip().upper() for part in chord.split("+") if part.strip()]
-        if not parts:
+        raw = chord.strip()
+        if not raw:
             raise DesktopAutomationUnavailable("Raccourci clavier vide.")
+
+        # ASCII letters remain raw key presses (R means the R key, not Shift+R).
+        # Other single printable characters are layout-aware so digits and
+        # accented keys behave semantically on AZERTY/QWERTY layouts.
+        if len(raw) == 1 and raw.isprintable() and not raw.isspace():
+            if raw.isascii() and raw.isalpha():
+                vk = self._vk_for_name(raw.upper())
+                self._send_inputs([
+                    self._keyboard_input(vk),
+                    self._keyboard_input(vk, KEYEVENTF_KEYUP),
+                ])
+            else:
+                self._press_layout_character(raw)
+            return
+
+        parts = [part.strip().upper() for part in raw.split("+") if part.strip()]
         vks = [self._vk_for_name(part) for part in parts]
         down = [self._keyboard_input(vk) for vk in vks]
         up = [self._keyboard_input(vk, KEYEVENTF_KEYUP) for vk in reversed(vks)]

@@ -1,4 +1,4 @@
-# Auto-DeepSeek / Clipboard Agent Relay — V2.13
+# Auto-DeepSeek / Clipboard Agent Relay — V2.14
 
 Application Python locale qui transforme un chat LLM Web utilisé manuellement en **agent de développement semi-autonome**. Le navigateur n’est pas interrogé par API/DOM : le Relay utilise le presse-papiers, des interactions Windows contrôlées, une surveillance visuelle et des fenêtres explicitement liées.
 
@@ -114,6 +114,8 @@ ID: <id-unique>
 
 Les métadonnées viennent avant une ligne vide ; la commande ou les actions viennent après. Le logiciel traduit cette enveloppe vers ses modèles internes typés.
 
+En V2.14, une réponse de contrôle doit contenir **uniquement** cette directive (brute ou dans un unique bloc `text`). Toute prose avant/après un bloc `#Relay` est rejetée. Cette contrainte rend le cycle Agent Auto déterministe et empêche l'agent de mélanger explications et commande machine dans le même tour.
+
 ### Choix de l’action
 
 | Besoin | Action |
@@ -186,6 +188,8 @@ ID: ui-actions-1
 
 Actions de payload : `#Click`, `#TypeInput`, `#Key`, `#Wait`, `#Observe`.
 
+`#TypeInput` injecte du texte Unicode (accents, symboles, emoji). Un `#Key` constitué d'un caractère imprimable simple est traduit selon le layout clavier Windows actif : par exemple `#Key 1` produit le caractère/touche logique `1` même sur AZERTY, et `#Key é` est supporté. Les lettres comme `#Key R` restent des touches brutes adaptées aux raccourcis/jeux.
+
 `#Wait` est réservé aux délais qui font partie du comportement testé. Il ne doit pas servir à deviner le temps de démarrage ou de rendu.
 
 `#Observe` retente une capture transitoirement quasi noire. Une capture qui reste inexploitable est signalée par `OBSERVATION_WARNINGS`.
@@ -245,7 +249,7 @@ LLM_WORKSPACE
  → envoi #RelayResult (Kind: TEST_SESSION)
 ```
 
-La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Cela évite de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
+La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Lors d'un démarrage où la Target s'est déjà mise elle-même foreground, le Relay est d'abord démoté de topmost puis la Target est explicitement remontée dans le Z-order avant readiness/`#Observe startup`. Cela évite que le Relay masque la première capture. Cela évite aussi de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
 
 Les contrôles de workspace sont **non destructifs** : si le bon HWND est déjà au premier plan, ils ne font rien. Un changement de focus ne réapplique pas la géométrie mémorisée et n’utilise `SW_RESTORE` que si la fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
 

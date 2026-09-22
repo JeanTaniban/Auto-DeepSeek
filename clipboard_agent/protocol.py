@@ -197,29 +197,38 @@ def _extract_control_body(text: str, marker_match: re.Match[str]) -> tuple[str, 
 
 
 def _extract_relay_v2_body(text: str) -> tuple[str, str] | None:
-    """Return one canonical #Relay body.
+    """Return one strict canonical #Relay body.
 
-    Canonical directives are recognized only when #Relay is the first non-empty
-    line of the copied payload or appears inside one fenced code block. A bare
-    #Relay mentioned later in prose is ignored, reducing accidental activation.
+    V2 is intentionally strict: the copied assistant response must be either
+    the bare directive itself or exactly one fenced code block containing the
+    directive. A fenced #Relay surrounded by prose is rejected so the agent is
+    forced into one machine-readable instruction per turn.
     """
-    candidates: list[tuple[str, str]] = []
-    for fence in _FENCE_RE.finditer(text):
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    if _RELAY_LINE_RE.fullmatch(stripped.splitlines()[0].strip()):
+        return stripped, ""
+
+    candidates: list[re.Match[str]] = []
+    for fence in _FENCE_RE.finditer(stripped):
         lines = [line.strip() for line in fence.group("body").splitlines() if line.strip()]
         if lines and _RELAY_LINE_RE.fullmatch(lines[0]):
-            candidates.append((fence.group("body"), fence.group("lang").lower()))
+            candidates.append(fence)
 
-    stripped = text.strip()
-    if stripped:
-        first = stripped.splitlines()[0].strip()
-        if _RELAY_LINE_RE.fullmatch(first):
-            candidates.append((stripped, ""))
-
-    if not candidates:
-        return None
-    if len(candidates) != 1:
+    if len(candidates) > 1:
         raise ProtocolError("Plusieurs directives #Relay détectées. Une seule directive est autorisée par message.")
-    return candidates[0]
+    if len(candidates) == 1:
+        fence = candidates[0]
+        if fence.start() != 0 or fence.end() != len(stripped):
+            raise ProtocolError(
+                "Réponse #Relay V2 invalide : le message doit contenir uniquement le bloc copiable, "
+                "sans titre, explication ou texte avant/après."
+            )
+        return fence.group("body"), fence.group("lang").lower()
+
+    return None
 
 
 def _parse_relay_v2(
@@ -381,6 +390,15 @@ def _parse_relay_v2(
 
 
 def _normalize_key_chord(raw: str) -> str:
+    raw = raw.strip()
+    # A single printable character is a valid semantic key. Preserve digits,
+    # punctuation and non-ASCII characters so Win32 can translate them through
+    # the active keyboard layout (e.g. "1" on AZERTY, "é" on French).
+    if len(raw) == 1 and raw.isprintable() and not raw.isspace():
+        if re.fullmatch(r"[A-Za-z]", raw):
+            return raw.upper()
+        return raw
+
     parts = [part.strip().upper() for part in raw.split("+") if part.strip()]
     if not parts:
         raise ProtocolError("#Key vide.")
