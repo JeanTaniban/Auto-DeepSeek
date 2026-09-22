@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -63,6 +64,20 @@ class ExecutionManager:
             daemon=True,
         )
         thread.start()
+
+    @staticmethod
+    def _child_environment() -> dict[str, str]:
+        """Keep agent subprocesses on the same Python runtime as the Relay."""
+        env = os.environ.copy()
+        python_exe = Path(sys.executable).resolve()
+        preferred = [str(python_exe.parent)]
+        scripts = python_exe.parent / "Scripts"
+        if scripts.exists():
+            preferred.append(str(scripts))
+        current_path = env.get("PATH", "")
+        env["PATH"] = os.pathsep.join([*preferred, current_path]) if current_path else os.pathsep.join(preferred)
+        env["CAR_PYTHON_EXE"] = str(python_exe)
+        return env
 
     def _build_invocation(self, request: ExecutionRequest, *, interactive: bool = False) -> list[str]:
         shell = request.shell.lower()
@@ -125,6 +140,7 @@ class ExecutionManager:
             errors="replace",
             bufsize=1,
             creationflags=creationflags,
+            env=self._child_environment(),
         )
 
     def launch_target(self, request: ExecutionRequest, cwd: Path) -> subprocess.Popen:
@@ -141,6 +157,7 @@ class ExecutionManager:
             self._build_invocation(request, interactive=True),
             cwd=str(cwd),
             creationflags=creationflags,
+            env=self._child_environment(),
         )
 
     def launch_external(self, request: ExecutionRequest, cwd: Path) -> int:
@@ -155,6 +172,7 @@ class ExecutionManager:
                 self._build_invocation(request, interactive=True),
                 cwd=str(cwd),
                 creationflags=creationflags,
+                env=self._child_environment(),
             )
             return int(proc.pid)
 
@@ -171,7 +189,7 @@ class ExecutionManager:
         ]
         for executable, command in candidates:
             if shutil.which(executable):
-                proc = subprocess.Popen(command, cwd=str(cwd))
+                proc = subprocess.Popen(command, cwd=str(cwd), env=self._child_environment())
                 return int(proc.pid)
         raise RuntimeError("Aucun terminal externe compatible n'a été trouvé.")
 
@@ -197,6 +215,7 @@ class ExecutionManager:
                 errors="replace",
                 bufsize=1,
                 creationflags=creationflags,
+                env=self._child_environment(),
                 **popen_kwargs,
             )
         except Exception as exc:

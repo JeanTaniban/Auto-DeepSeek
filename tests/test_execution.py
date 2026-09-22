@@ -1,5 +1,6 @@
 import os
 import threading
+import sys
 from pathlib import Path
 
 from clipboard_agent.execution import ExecutionManager
@@ -54,3 +55,11 @@ def test_interactive_invocation_keeps_powershell_open():
     command = invocation[invocation.index("-Command") + 1]
     assert command == "Write-Host hello"
     assert "$carExitCode" not in command
+
+
+def test_child_environment_prioritizes_relay_python():
+    manager = ExecutionManager()
+    env = manager._child_environment()
+    expected = Path(sys.executable).resolve()
+    assert env["CAR_PYTHON_EXE"] == str(expected)
+    assert env["PATH"].split(os.pathsep)[0] == str(expected.parent)
