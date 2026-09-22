@@ -1860,7 +1860,8 @@ class ClipboardAgentApp(tk.Tk):
 
         if self.auto_enabled and not self.auto_paused:
             if not result.llm_restored:
-                self._stop_auto("TestSession terminée mais le workspace LLM n'a pas pu être restauré.")
+                detail = result.note or getattr(getattr(self, "workspace", None), "last_error", None) or "raison inconnue"
+                self._stop_auto(f"TestSession terminée mais le workspace LLM n'a pas pu être restauré : {detail}")
                 return
             if self.auto_state in {AutoState.TEST_OPENING, AutoState.TEST_ACTING}:
                 if not self._transition_auto(AutoState.TEST_RESTORING):

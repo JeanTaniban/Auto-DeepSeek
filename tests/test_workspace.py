@@ -55,6 +55,7 @@ class FakeDesktop:
         self.activations.append(hwnd)
         self.foreground = hwnd
     def is_foreground(self, hwnd): return self.foreground == hwnd
+    def foreground_window(self): return self.foreground
 
 
 def _bound_manager(d):
@@ -127,3 +128,14 @@ def test_llm_point_ownership_drift_fails_safe_without_repositioning_window():
     d.point_owners[(60, 60)] = 30
     assert manager.ensure_llm_workspace() is False
     assert d.restored == []
+
+
+def test_workspace_exposes_precise_focus_failure_reason():
+    d = FakeDesktop()
+    manager = _bound_manager(d)
+    def refuse(_hwnd):
+        pass
+    d.activate_window = refuse
+    d.foreground = 30
+    assert manager.ensure_llm_workspace() is False
+    assert manager.last_error == "Focus LLM non obtenu (attendu=20, foreground=30)."

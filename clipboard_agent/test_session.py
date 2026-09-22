@@ -499,7 +499,10 @@ class PersistentTestSession:
                 if on_stage: on_stage("restoring")
                 llm_restored = self.workspace.restore_llm_workspace()
                 if not llm_restored:
-                    raise DesktopAutomationUnavailable("Impossible de restaurer le workspace LLM après ouverture de la TestSession.")
+                    reason = self.workspace.last_error or "raison Win32 inconnue"
+                    raise DesktopAutomationUnavailable(
+                        f"Impossible de restaurer le workspace LLM après ouverture de la TestSession : {reason}"
+                    )
                 self._set_state(TestSessionState.ACTIVE_BACKGROUND)
                 status = ExecutionStatus.SUCCESS
                 note = "TestSession ouverte et conservée en arrière-plan."
@@ -593,7 +596,10 @@ class PersistentTestSession:
                 if on_stage: on_stage("restoring")
                 llm_restored = self.workspace.restore_llm_workspace()
                 if not llm_restored:
-                    raise DesktopAutomationUnavailable("Impossible de restaurer le workspace LLM après les actions de test.")
+                    reason = self.workspace.last_error or "raison Win32 inconnue"
+                    raise DesktopAutomationUnavailable(
+                        f"Impossible de restaurer le workspace LLM après les actions de test : {reason}"
+                    )
                 self._set_state(TestSessionState.ACTIVE_BACKGROUND)
                 status = ExecutionStatus.SUCCESS
                 note = "Actions exécutées ; TestSession toujours ouverte."

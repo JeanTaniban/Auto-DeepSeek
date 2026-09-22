@@ -57,6 +57,7 @@ class WindowWorkspaceManager:
         self.desktop = desktop
         self.binding: WorkspaceBinding | None = None
         self._relay_topmost: bool | None = None
+        self.last_error: str | None = None
 
     @property
     def llm_hwnd(self) -> int | None:
@@ -103,7 +104,12 @@ class WindowWorkspaceManager:
             send_point=send_point,
         )
         self._relay_topmost = None
+        self.last_error = None
         return self.binding
+
+    def _fail(self, message: str) -> bool:
+        self.last_error = message
+        return False
 
     def _set_relay_topmost(self, enabled: bool) -> None:
         binding = self.binding
@@ -145,11 +151,14 @@ class WindowWorkspaceManager:
             return False
 
     def ensure_llm_workspace(self) -> bool:
+        self.last_error = None
         binding = self.binding
         if binding is None:
-            return False
-        if not self.desktop.window_exists(binding.llm.hwnd) or not self.desktop.window_exists(binding.relay.hwnd):
-            return False
+            return self._fail("Workspace LLM non lié.")
+        if not self.desktop.window_exists(binding.llm.hwnd):
+            return self._fail(f"Fenêtre LLM disparue (hwnd={binding.llm.hwnd}).")
+        if not self.desktop.window_exists(binding.relay.hwnd):
+            return self._fail(f"Fenêtre Relay disparue (hwnd={binding.relay.hwnd}).")
         # Fast no-op when already correct. If focus must be repaired, only
         # foreground/Z-order change; saved geometry is never reapplied here.
         try:
@@ -157,28 +166,49 @@ class WindowWorkspaceManager:
             if not self.desktop.is_foreground(binding.llm.hwnd):
                 self.desktop.activate_window(binding.llm.hwnd)
             if not self.desktop.is_foreground(binding.llm.hwnd):
-                return False
+                foreground = self.desktop.foreground_window()
+                return self._fail(
+                    f"Focus LLM non obtenu (attendu={binding.llm.hwnd}, foreground={foreground})."
+                )
             if not self._llm_geometry_is_stable():
-                return False
-            return self._llm_points_are_still_owned()
-        except DesktopAutomationUnavailable:
-            return False
+                current = self.desktop.window_rect(binding.llm.hwnd)
+                expected = binding.llm.rect
+                return self._fail(
+                    "Géométrie LLM modifiée pendant Auto "
+                    f"(attendu={expected}, actuel={current}). Aucune fenêtre n'a été déplacée automatiquement."
+                )
+            if not self._llm_points_are_still_owned():
+                prompt_owner = self.desktop.window_at_point(binding.prompt_point)
+                send_owner = self.desktop.window_at_point(binding.send_point)
+                return self._fail(
+                    "Points navigateur masqués ou déplacés "
+                    f"(LLM={binding.llm.hwnd}, prompt_owner={prompt_owner}, send_owner={send_owner})."
+                )
+            return True
+        except DesktopAutomationUnavailable as exc:
+            return self._fail(str(exc))
 
     def ensure_target_workspace(self, target_hwnd: int) -> bool:
+        self.last_error = None
         binding = self.binding
-        if (
-            binding is None
-            or not self.desktop.window_exists(binding.relay.hwnd)
-            or not self.desktop.window_exists(target_hwnd)
-        ):
-            return False
+        if binding is None:
+            return self._fail("Workspace LLM non lié.")
+        if not self.desktop.window_exists(binding.relay.hwnd):
+            return self._fail(f"Fenêtre Relay disparue (hwnd={binding.relay.hwnd}).")
+        if not self.desktop.window_exists(target_hwnd):
+            return self._fail(f"Fenêtre Target disparue (hwnd={target_hwnd}).")
         try:
             self._set_relay_topmost(False)
             if not self.desktop.is_foreground(target_hwnd):
                 self.desktop.activate_window(target_hwnd)
-            return self.desktop.is_foreground(target_hwnd)
-        except DesktopAutomationUnavailable:
-            return False
+            if not self.desktop.is_foreground(target_hwnd):
+                foreground = self.desktop.foreground_window()
+                return self._fail(
+                    f"Focus Target non obtenu (attendu={target_hwnd}, foreground={foreground})."
+                )
+            return True
+        except DesktopAutomationUnavailable as exc:
+            return self._fail(str(exc))
 
     def restore_llm_workspace(self) -> bool:
         return self.ensure_llm_workspace()
@@ -187,6 +217,7 @@ class WindowWorkspaceManager:
         binding = self.binding
         self.binding = None
         self._relay_topmost = None
+        self.last_error = None
         if binding is None:
             return
         try:

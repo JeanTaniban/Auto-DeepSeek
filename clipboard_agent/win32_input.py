@@ -250,6 +250,10 @@ if os.name == "nt":
     user32.GetAncestor.restype = wintypes.HWND
     user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
     user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.BringWindowToTop.argtypes = (wintypes.HWND,)
+    user32.BringWindowToTop.restype = wintypes.BOOL
+    user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
+    user32.AttachThreadInput.restype = wintypes.BOOL
     user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
     user32.ShowWindow.restype = wintypes.BOOL
     user32.IsWindow.argtypes = (wintypes.HWND,)
@@ -825,19 +829,48 @@ class Win32DesktopInput:
             raise DesktopAutomationUnavailable("La fenêtre cible n'existe plus.")
         if self.is_foreground(hwnd):
             return
-        # SW_RESTORE must only be used for an actually minimized window.
-        # Calling it on every focus check can unmaximize/reposition the app
-        # just before a click or capture.
-        if user32.IsIconic(wintypes.HWND(hwnd)):
-            user32.ShowWindow(wintypes.HWND(hwnd), SW_RESTORE)
+
+        target = wintypes.HWND(int(hwnd))
+        # SW_RESTORE is restricted to a genuinely minimized window. No
+        # geometry is reapplied during an ordinary workspace handoff.
+        if user32.IsIconic(target):
+            user32.ShowWindow(target, SW_RESTORE)
             time.sleep(0.03)
-        if not user32.SetForegroundWindow(wintypes.HWND(hwnd)):
-            # Windows may deny focus stealing transiently. A click on the target
-            # client will still focus it, but keyboard-only actions must fail safe.
-            time.sleep(0.05)
-            if int(user32.GetForegroundWindow() or 0) != int(hwnd):
-                raise DesktopAutomationUnavailable("Impossible de placer la fenêtre cible au premier plan.")
+
+        # First try the normal API. Windows can deny this when the foreground
+        # currently belongs to the launched Target App.
+        user32.SetForegroundWindow(target)
         time.sleep(0.03)
+        if self.is_foreground(hwnd):
+            return
+
+        # Deterministic fallback: temporarily join this worker thread to the
+        # current foreground input queue, raise only the target Z-order, and
+        # retry foreground activation. This does not move or resize windows.
+        current_tid = int(kernel32.GetCurrentThreadId() or 0)
+        foreground = int(user32.GetForegroundWindow() or 0)
+        foreground_tid = 0
+        if foreground:
+            pid = wintypes.DWORD()
+            foreground_tid = int(
+                user32.GetWindowThreadProcessId(wintypes.HWND(foreground), ctypes.byref(pid)) or 0
+            )
+        attached = False
+        try:
+            if current_tid and foreground_tid and current_tid != foreground_tid:
+                attached = bool(user32.AttachThreadInput(current_tid, foreground_tid, True))
+            user32.BringWindowToTop(target)
+            user32.SetForegroundWindow(target)
+            time.sleep(0.03)
+        finally:
+            if attached:
+                user32.AttachThreadInput(current_tid, foreground_tid, False)
+
+        if not self.is_foreground(hwnd):
+            actual = int(user32.GetForegroundWindow() or 0)
+            raise DesktopAutomationUnavailable(
+                f"Impossible de placer la fenêtre cible au premier plan (cible={int(hwnd)}, foreground={actual})."
+            )
 
     def restore_window(self, snapshot: WindowSnapshot | None) -> bool:
         self._require_windows()
