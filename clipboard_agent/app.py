@@ -1275,6 +1275,14 @@ class ClipboardAgentApp(tk.Tk):
         return True
 
     def _handle_execution(self, request: ExecutionRequest, cwd: Path, source_auto: bool) -> None:
+        test_session = getattr(self, "test_session", None)
+        if source_auto and test_session is not None and test_session.active:
+            self._stop_auto(
+                "Action EXECUTION impossible pendant une TestSession persistante. "
+                "Utilisez TEST_ACTIONS ou CLOSE_TEST_SESSION."
+            )
+            return
+
         decision = classify_command(request.command)
         self.pending_request = request
         self.pending_cwd = cwd
