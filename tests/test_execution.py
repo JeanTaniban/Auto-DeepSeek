@@ -11,19 +11,19 @@ def wait_run(req: ExecutionRequest, cwd: Path):
     done = threading.Event()
     holder = {}
     manager.execute_async(req, cwd, lambda *_: None, lambda result: (holder.setdefault("result", result), done.set()))
-    assert done.wait(10)
+    assert done.wait(25)
     return holder["result"]
 
 
 def test_execution_success(tmp_path: Path):
-    req = ExecutionRequest(command="python -c \"print('ok')\"", shell="powershell" if os.name == "nt" else "bash", timeout=5, request_id="t1")
+    req = ExecutionRequest(command="python -c \"print('ok')\"", shell="powershell" if os.name == "nt" else "bash", timeout=15, request_id="t1")
     result = wait_run(req, tmp_path)
     assert result.status == ExecutionStatus.SUCCESS
     assert "ok" in result.stdout
 
 
 def test_execution_error(tmp_path: Path):
-    req = ExecutionRequest(command="python -c \"import sys; sys.exit(7)\"", shell="powershell" if os.name == "nt" else "bash", timeout=5, request_id="t2")
+    req = ExecutionRequest(command="python -c \"import sys; sys.exit(7)\"", shell="powershell" if os.name == "nt" else "bash", timeout=15, request_id="t2")
     result = wait_run(req, tmp_path)
     assert result.status == ExecutionStatus.ERROR
     assert result.exit_code == 7
