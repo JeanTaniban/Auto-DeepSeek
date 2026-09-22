@@ -236,3 +236,22 @@ def test_format_test_session_result_explains_persistence_and_visual_attachment()
     assert "SessionActive: YES" in result
     assert "Operation: ACTIONS" in result
     assert "#VisualObservation" in result
+
+
+def test_open_failure_restores_llm_and_returns_process_exit_diagnostics():
+    session, proc, desktop, workspace = make_session("")
+    desktop.best_window_for_pids = lambda _pids: None
+    proc._exit = 3
+    req = ExecutionRequest("python app.py", shell="powershell", request_id="failed-open", timeout=5)
+    results = []
+    session.open_async(
+        req, Path("."), (), "window",
+        window_timeout_seconds=0.5, visual_stable_seconds=0.2, visual_poll_ms=50,
+        settle_seconds=0, action_delay_seconds=0,
+        on_status=lambda _s: None, on_done=results.append,
+    )
+    result = wait_done(results, timeout=4.0)
+    assert result.status == ExecutionStatus.ERROR
+    assert result.llm_restored is True
+    assert "ExitCode=3" in result.note
+    assert workspace.events[-1] == ("llm",)

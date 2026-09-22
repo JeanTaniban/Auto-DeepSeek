@@ -226,7 +226,17 @@ class PersistentTestSession:
     def _current_process_alive(self) -> bool:
         with self._lock:
             proc = self._proc
-        return bool(proc is not None and proc.poll() is None)
+            known = set(self._known_pids)
+        if proc is not None and proc.poll() is None:
+            return True
+        for pid in known:
+            try:
+                child = psutil.Process(int(pid))
+                if child.is_running() and child.status() != psutil.STATUS_ZOMBIE:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
 
     def _output_delta(self) -> tuple[str, str, list[str]]:
         with self._lock:
@@ -261,14 +271,23 @@ class PersistentTestSession:
         return replacement
 
     def _wait_for_window(self, deadline: float, timeout_seconds: float) -> WindowInfo | None:
-        end = min(deadline, time.monotonic() + max(0.5, timeout_seconds))
+        timeout_seconds = max(0.5, float(timeout_seconds))
+        end = min(deadline, time.monotonic() + timeout_seconds)
+        process_exit_seen_at: float | None = None
+        exit_grace_seconds = min(5.0, max(2.0, timeout_seconds * 0.10))
         while time.monotonic() < end and not self._cancel.is_set():
-            if not self._current_process_alive():
-                return None
             target = self._refresh_target()
             if target is not None:
                 return target
-            time.sleep(0.1)
+            if self._current_process_alive():
+                process_exit_seen_at = None
+            else:
+                now = time.monotonic()
+                if process_exit_seen_at is None:
+                    process_exit_seen_at = now
+                elif now - process_exit_seen_at >= exit_grace_seconds:
+                    return None
+            time.sleep(0.15)
         return None
 
     def _wait_checkpoint(self, name: str, deadline: float) -> bool:
@@ -475,7 +494,15 @@ class PersistentTestSession:
                 if target is None:
                     if self._cancel.is_set():
                         raise _TestCancelledOrTimeout()
-                    raise DesktopAutomationUnavailable("Aucune fenêtre de TestSession n'a été détectée.")
+                    proc_exit = proc.poll()
+                    if proc_exit is not None and not self._current_process_alive():
+                        raise DesktopAutomationUnavailable(
+                            "Le processus de TestSession s'est terminé avant l'apparition d'une fenêtre "
+                            f"(ExitCode={proc_exit}). Consultez stdout/stderr ci-dessous."
+                        )
+                    raise DesktopAutomationUnavailable(
+                        f"Aucune fenêtre de TestSession détectée après {float(window_timeout_seconds):.1f}s."
+                    )
                 if on_stage: on_stage("foreground")
                 if not self.workspace.ensure_target_workspace(target.hwnd):
                     raise DesktopAutomationUnavailable("Impossible d'activer le workspace Target App.")
@@ -507,18 +534,23 @@ class PersistentTestSession:
                 status = ExecutionStatus.SUCCESS
                 note = "TestSession ouverte et conservée en arrière-plan."
             except _TestCancelledOrTimeout:
-                status = ExecutionStatus.CANCELLED if self._cancel.is_set() else ExecutionStatus.TIMEOUT
-                note = "Intervention utilisateur : TestSession laissée ouverte." if self._cancel.is_set() else "Timeout d'ouverture de la TestSession."
-                if self._current_process_alive():
-                    self._set_state(TestSessionState.ACTIVE_FOREGROUND)
+                cancelled = self._cancel.is_set()
+                status = ExecutionStatus.CANCELLED if cancelled else ExecutionStatus.TIMEOUT
+                note = "Intervention utilisateur : TestSession laissée ouverte." if cancelled else "Timeout d'ouverture de la TestSession."
+                if not cancelled:
+                    llm_restored = self.workspace.restore_llm_workspace()
+                if self._refresh_target() is not None and self._current_process_alive():
+                    self._set_state(TestSessionState.ACTIVE_BACKGROUND if llm_restored else TestSessionState.ACTIVE_FOREGROUND)
                 else:
                     self._set_state(TestSessionState.LOST)
             except Exception as exc:
                 status = ExecutionStatus.ERROR
                 note = str(exc)
                 logs.append(f"ERROR: {exc}")
-                if self._current_process_alive():
-                    self._set_state(TestSessionState.ACTIVE_FOREGROUND)
+                if not self._cancel.is_set():
+                    llm_restored = self.workspace.restore_llm_workspace()
+                if self._refresh_target() is not None and self._current_process_alive():
+                    self._set_state(TestSessionState.ACTIVE_BACKGROUND if llm_restored else TestSessionState.ACTIVE_FOREGROUND)
                 else:
                     self._set_state(TestSessionState.LOST)
             out, err, checkpoints = self._output_delta()
