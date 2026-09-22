@@ -451,11 +451,18 @@ class _TargetCancelledOrTimeout(RuntimeError):
 
 
 def format_multiple_result(result: TargetSessionResult, goal_reminder: str = "") -> str:
-    lines = [
+    from .protocol import relay_result_header
+
+    recommended = "EXECUTION,OPEN_TEST_SESSION,SHOW,END"
+    if result.target_left_open:
+        recommended = "NONE_USER_TAKEOVER"
+    lines = relay_result_header(
+        "TEMP_TEST",
+        result.request_id,
+        result.status.value,
         "#MultipleResult",
-        "Protocol: 1",
-        f"ID: {result.request_id}",
-        f"Status: {result.status.value}",
+        recommended,
+    ) + [
         f"Duration: {result.duration:.2f}s",
         f"TargetWindow: {result.target_title or '<unknown>'}",
         f"ClientSize: {result.client_width}x{result.client_height}",
