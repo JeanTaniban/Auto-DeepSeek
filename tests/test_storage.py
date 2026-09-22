@@ -1,3 +1,5 @@
+import json
+
 from clipboard_agent.storage import Settings, SettingsStore
 
 
@@ -136,3 +138,23 @@ def test_target_app_timing_defaults_and_persistence(tmp_path):
     assert loaded.auto_target_window_timeout_seconds == 22.0
     assert loaded.auto_target_action_delay_seconds == 0.35
     assert loaded.auto_target_attachment_to_send_seconds == 0.7
+
+
+def test_legacy_timing_profile_is_migrated_to_relaxed_defaults(tmp_path):
+    store = SettingsStore(base_dir=tmp_path)
+    store.path.write_text(json.dumps({
+        "auto_target_window_timeout_seconds": 15.0,
+        "auto_target_launch_settle_seconds": 0.6,
+        "auto_test_ready_stable_seconds": 1.2,
+        "auto_test_activation_settle_seconds": 0.25,
+        "auto_clipboard_timeout_seconds": 1.5,
+    }), encoding="utf-8")
+    loaded = store.load()
+    assert loaded.timing_profile_version == 2
+    assert loaded.auto_target_window_timeout_seconds >= 60.0
+    assert loaded.auto_target_launch_settle_seconds >= 2.0
+    assert loaded.auto_test_ready_stable_seconds >= 3.0
+    assert loaded.auto_test_activation_settle_seconds >= 1.0
+    assert loaded.auto_clipboard_timeout_seconds >= 4.0
+    persisted = json.loads(store.path.read_text(encoding="utf-8"))
+    assert persisted["timing_profile_version"] == 2
