@@ -255,3 +255,38 @@ Les métadonnées restantes dépendent de l'action. Le parser traduit ensuite ve
 - Diagnostics UI/runtime normalisés sur les noms d'actions V2.
 - README, CDC global et STATE_MACHINE alignés en V2.13.
 - Validation de chaque brique effectuée via GitHub Actions ; matrice Ubuntu/Windows × Python 3.11/3.12 verte avant intégration finale.
+
+
+## Mission corrective — startup Observe, Unicode et unicité des directives
+
+### Problèmes observés en test réel
+- Lors d'un `OPEN_TEST_SESSION` avec `#Observe startup`, la Target peut déjà être foreground au moment où le Relay perd son statut topmost. Dans ce cas, le Relay est démoté dans la bande non-topmost mais peut rester visuellement au-dessus de la Target ; comme la Target est déjà foreground, le code n'effectue aucun raise supplémentaire.
+- Les saisies de texte doivent supporter explicitement les caractères Unicode (accents, symboles, caractères hors ASCII) et être testées de bout en bout parser -> action -> injection Win32.
+- Le prompt demande une seule directive copiable, mais le parser V2 accepte encore une directive dans un bloc fenced entouré de prose. Cela autorise exactement le comportement observé : analyse textuelle + bloc copiable dans la même réponse.
+
+### Objectif concret
+Rendre les interactions de test plus déterministes :
+1. garantir que la Target est réellement au-dessus du Relay avant readiness/capture, y compris si elle était déjà foreground ;
+2. garantir la conservation et l'injection Unicode de `#TypeInput` ;
+3. rendre le format V2 strict : une réponse de contrôle doit contenir uniquement une directive `#Relay` copiable, sans prose avant/après.
+
+### Périmètre
+- Workspace Target : ajout d'un raise Z-order explicite après retrait du topmost Relay.
+- Win32 : tests purs des séquences UTF-16 injectées par `type_text`, y compris accents et surrogate pairs.
+- Protocole V2 : rejet des enveloppes `#Relay` entourées de prose, même dans un bloc fenced.
+- Prompt : règle répétée et placée en tête, avec exemple explicite de réponse invalide.
+- Compatibilité V1 conservée pour les anciens chats, mais aucune tolérance supplémentaire n'est ajoutée.
+
+### Tests prévus
+- Target déjà foreground + Relay topmost -> le Target est explicitement remonté après démotion du Relay.
+- Target non foreground -> activation puis raise, sans déplacement/redimensionnement.
+- `#TypeInput "éàçù €"` conserve exactement la chaîne au parsing.
+- Injection Win32 Unicode : unités UTF-16 down/up exactes pour accents et emoji.
+- V2 strict : réponse brute canonique acceptée ; bloc fenced seul accepté ; prose avant/après rejetée ; plusieurs blocs rejetés.
+- Prompt : présence d'une règle explicite « rien avant, rien après ».
+
+### Critères de validation
+- Aucun `#Observe startup` nominal ne peut être capturé avec le Relay encore visuellement au-dessus de la Target à cause du cas « Target déjà foreground ».
+- Les accents sont conservés du protocole jusqu'à `SendInput`.
+- Une réponse V2 avec prose hors directive est refusée avec une erreur explicite.
+- Toute la suite existante reste verte sur Ubuntu/Windows Python 3.11/3.12.
