@@ -49,8 +49,8 @@ class FakeDesktop:
     def type_text(self, text):
         self.actions.append(("type", text))
 
-    def press_key_chord(self, chord):
-        self.actions.append(("key", chord))
+    def press_key_chord(self, chord, *, target_hwnd=None):
+        self.actions.append(("key", chord, target_hwnd))
 
     def capture_window_client(self, hwnd):
         self.actions.append(("observe", hwnd))
@@ -109,7 +109,7 @@ def test_target_session_runs_actions_closes_and_restores(monkeypatch, tmp_path: 
     assert result.browser_restored is True
     assert ("click", 100, 30, 40) in desktop.actions
     assert ("type", "test") in desktop.actions
-    assert ("key", "ENTER") in desktop.actions
+    assert ("key", "ENTER", 100) in desktop.actions
     assert ("close", 100) in desktop.actions
     assert ("restore", 9) in desktop.actions
     assert stages == ["running", "restoring"]
