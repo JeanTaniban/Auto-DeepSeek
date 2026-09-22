@@ -9,6 +9,11 @@ from clipboard_agent.win32_input import Win32DesktopInput
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Win32 focus behavior")
 
 
+def _hwnd_value(hwnd):
+    value = getattr(hwnd, "value", hwnd)
+    return int(value)
+
+
 class _FakeUser32:
     def __init__(self, *, iconic=False):
         self.iconic = iconic
@@ -19,11 +24,11 @@ class _FakeUser32:
         return int(self.iconic)
 
     def ShowWindow(self, hwnd, command):
-        self.show_calls.append((int(hwnd), int(command)))
+        self.show_calls.append((_hwnd_value(hwnd), int(command)))
         return 1
 
     def SetForegroundWindow(self, hwnd):
-        self.foreground_calls.append(int(hwnd))
+        self.foreground_calls.append(_hwnd_value(hwnd))
         return 1
 
     def GetForegroundWindow(self):
