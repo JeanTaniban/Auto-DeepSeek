@@ -240,3 +240,18 @@ Les métadonnées restantes dépendent de l'action. Le parser traduit ensuite ve
 - Tous les anciens tests de compatibilité passent.
 - Compile + pytest verts sur Ubuntu/Windows Python 3.11/3.12.
 - Fusion sur `main` uniquement après CI verte.
+
+
+### Validation — Protocole V2 lisible et déterministe
+- Parser canonique `#Relay / Protocol: 2 / Action` implémenté et traduit vers les `DirectiveKind` existants.
+- Actions V2 couvertes : EXECUTION, OPEN_TEST_SESSION, TEST_ACTIONS, CLOSE_TEST_SESSION, TEMP_TEST, SHOW, END.
+- Validation stricte : protocol, action, ID, métadonnées autorisées, bloc fenced avec prose introductive et rejet de plusieurs enveloppes.
+- Sécurité de parsing : une simple citation `#Relay` au milieu de prose n'active pas le protocole canonique.
+- Compatibilité : toute la suite de tests des anciens marqueurs V1 reste présente et verte.
+- Prompt initial réduit d'environ 10,8 k à 7,0 k caractères, avec tableau de décision en tête et un seul marqueur top-level enseigné.
+- Alias historiques retirés du prompt normal ; ils restent parser-only.
+- Résultats EXECUTION / TEST_SESSION / TEMP_TEST préfixés par `#RelayResult Protocol: 2` et `LegacyMarker` de compatibilité.
+- TestSessionResult expose `SessionState` et `RecommendedNext` ; LOST recommande explicitement CLOSE_TEST_SESSION.
+- Diagnostics UI/runtime normalisés sur les noms d'actions V2.
+- README, CDC global et STATE_MACHINE alignés en V2.13.
+- Validation de chaque brique effectuée via GitHub Actions ; matrice Ubuntu/Windows × Python 3.11/3.12 verte avant intégration finale.
