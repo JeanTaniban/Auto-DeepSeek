@@ -1,4 +1,4 @@
-# Auto-DeepSeek / Clipboard Agent Relay — V2.12
+# Auto-DeepSeek / Clipboard Agent Relay — V2.13
 
 Application Python locale qui transforme un chat LLM Web utilisé manuellement en **agent de développement semi-autonome**. Le navigateur n’est pas interrogé par API/DOM : le Relay utilise le presse-papiers, des interactions Windows contrôlées, une surveillance visuelle et des fenêtres explicitement liées.
 
@@ -6,15 +6,19 @@ Application Python locale qui transforme un chat LLM Web utilisé manuellement e
 
 Le flux principal reste simple : le LLM produit une directive copiable, le Relay l’exécute localement, puis renvoie automatiquement le résultat au chat en mode Agent Auto.
 
-Fonctions principales :
+Le protocole canonique V2 utilise **un seul marqueur top-level** : `#Relay`, puis un champ `Action:` explicite.
 
-- `#Execution` : commande shell atomique + stdout/stderr ;
-- `#OpenTestSession` : lance l’application développée et la garde ouverte entre plusieurs tours LLM ;
-- `#TestActions` : clics/clavier/observations sur cette même application ;
-- `#CloseTestSession` : ferme la session et renvoie les logs finaux ;
-- `#Multiple` avec `Launch:` : ancien test temporaire launch→actions→close ;
-- `#Show` : démonstration visible à l’utilisateur et arrêt Auto ;
-- `#End` : fin de mission.
+Actions principales :
+
+- `EXECUTION` : commande shell atomique + stdout/stderr ;
+- `OPEN_TEST_SESSION` : lance l’application développée et la garde ouverte entre plusieurs tours LLM ;
+- `TEST_ACTIONS` : clics/clavier/observations sur cette même application ;
+- `CLOSE_TEST_SESSION` : ferme la session et renvoie les logs finaux ;
+- `TEMP_TEST` : test UI court launch→actions→close ;
+- `SHOW` : démonstration visible à l’utilisateur et arrêt Auto ;
+- `END` : fin de mission.
+
+Les marqueurs V1 restent acceptés par le parser pour les conversations déjà démarrées, mais ne sont plus le format recommandé.
 
 ## Installation / lancement Windows
 
@@ -94,12 +98,40 @@ Le bouton **Tester la détection Copier** :
 - affiche confiance, coordonnées locales/globales et position réellement atteinte ;
 - écrit les diagnostics dans `~/.clipboard_agent_relay/diagnostics/`.
 
-## Protocole minimal
+## Protocole V2 canonique
 
-### Commande
+### Principe
+
+Chaque directive utilise la même enveloppe :
 
 ```text
-#Execution
+#Relay
+Protocol: 2
+Action: <ACTION>
+ID: <id-unique>
+...
+```
+
+Les métadonnées viennent avant une ligne vide ; la commande ou les actions viennent après. Le logiciel traduit cette enveloppe vers ses modèles internes typés.
+
+### Choix de l’action
+
+| Besoin | Action |
+|---|---|
+| terminal / fichiers / build / tests | `EXECUTION` |
+| ouvrir une UI persistante | `OPEN_TEST_SESSION` |
+| agir sur la UI persistante | `TEST_ACTIONS` |
+| fermer la UI persistante | `CLOSE_TEST_SESSION` |
+| test UI one-shot | `TEMP_TEST` |
+| donner le programme à l’utilisateur | `SHOW` |
+| terminer la mission | `END` |
+
+### Commande terminal
+
+```text
+#Relay
+Protocol: 2
+Action: EXECUTION
 ID: inspect-1
 Shell: powershell
 CWD: .
@@ -108,12 +140,12 @@ Timeout: 120
 git status --short
 ```
 
-Une commande à la fois. Le prochain tour contient `#ExecutionResult`.
-
 ### Ouvrir une TestSession persistante
 
 ```text
-#OpenTestSession
+#Relay
+Protocol: 2
+Action: OPEN_TEST_SESSION
 ID: gui-1
 Shell: powershell
 CWD: .
@@ -124,74 +156,55 @@ Ready: auto
 #Observe startup
 ```
 
-Le `#Observe` initial est optionnel et compacte « lancer + voir » en un seul tour.
+Readiness :
+- `auto` : contenu rendu puis UI stable ou rendu dynamique actif ;
+- `content` : plusieurs frames non noires sans exigence de stabilité ;
+- `checkpoint:<nom>` : synchronisation logique puis surface rendue ; recommandé lorsque le code peut être instrumenté ;
+- `window` : existence de la fenêtre uniquement ;
+- `delay:<ms>` : mécanisme explicite exceptionnel, pas une méthode de détection de readiness.
 
-Readiness disponibles :
-
-```text
-Ready: auto
-Ready: content
-Ready: window
-Ready: delay:1500
-Ready: checkpoint:main-window-ready
-```
-
-- `auto` attend un contenu rendu puis accepte soit une UI stable, soit un rendu dynamique actif ;
-- `content` attend plusieurs frames non noires sans exiger de stabilité, adapté aux jeux/animations ;
-- `window` valide seulement l'existence de la fenêtre ;
-- `delay` reste un mécanisme explicite mais ne doit pas servir à deviner une readiness ;
-- `checkpoint` synchronise l'état logique du programme puis vérifie qu'une surface rendue exploitable existe.
-
-Checkpoint dans le programme testé :
+Instrumentation :
 
 ```python
 print("[[CAR_CHECKPOINT:main-window-ready]]", flush=True)
-```
-
-Demande de capture différée :
-
-```python
 print("[[CAR_SCREENSHOT:menu-open]]", flush=True)
 ```
 
-### Agir sur la session ouverte
+### Agir sur la TestSession
 
 ```text
-#TestActions
+#Relay
+Protocol: 2
+Action: TEST_ACTIONS
 ID: ui-actions-1
 
 #Click 300;240
 #TypeInput "test"
 #Key ENTER
-#Wait 500
 #Observe after-input
 ```
 
-Actions : `#Click`, `#TypeInput` (`#Typeinout` alias), `#Key`, `#Wait`, `#Observe`.
+Actions de payload : `#Click`, `#TypeInput`, `#Key`, `#Wait`, `#Observe`.
 
-`#Observe` retente automatiquement une capture transitoirement quasi noire et conserve la frame la plus informative. Si l'image reste quasi noire, le résultat contient `OBSERVATION_WARNINGS` afin que l'agent n'interprète pas cette image comme fiable. `#Wait` reste disponible pour les délais qui font réellement partie du test, pas pour deviner le temps de démarrage/rendu.
+`#Wait` est réservé aux délais qui font partie du comportement testé. Il ne doit pas servir à deviner le temps de démarrage ou de rendu.
 
-Une action unique peut être envoyée seule, par exemple :
-
-```text
-#Observe current
-```
-
-`#Multiple` sans `Launch:` est un alias de `#TestActions`.
+`#Observe` retente une capture transitoirement quasi noire. Une capture qui reste inexploitable est signalée par `OBSERVATION_WARNINGS`.
 
 ### Fermer la TestSession
 
 ```text
-#CloseTestSession
+#Relay
+Protocol: 2
+Action: CLOSE_TEST_SESSION
 ID: gui-close-1
 ```
 
-Le résultat final inclut stdout/stderr complets et `SessionActive: NO`.
-
-### Test temporaire V2.11
+### Test temporaire
 
 ```text
-#Multiple
+#Relay
+Protocol: 2
+Action: TEMP_TEST
 ID: quick-ui
 Shell: powershell
 CWD: .
@@ -199,11 +212,24 @@ Timeout: 120
 Launch: python app.py
 
 #Observe initial
-#Click 300;240
-#Observe final
 ```
 
-Avec `Launch:`, la cible est fermée à la fin du bloc.
+### Résultats
+
+Tous les résultats canoniques commencent par :
+
+```text
+#RelayResult
+Protocol: 2
+Kind: ...
+LegacyMarker: ...
+ID: ...
+Status: ...
+```
+
+`LegacyMarker` sert uniquement à maintenir la compatibilité avec les prompts V1 déjà en cours.
+
+Les résultats de TestSession ajoutent `SessionState` et `RecommendedNext`. L’agent n’a donc plus à déduire implicitement si la session est encore active ni quel type d’action utiliser ensuite.
 
 ## Workspaces Target App
 
@@ -216,7 +242,7 @@ LLM_WORKSPACE
  → TARGET_WORKSPACE
  → actions / captures
  → restauration + vérification LLM_WORKSPACE
- → envoi #TestSessionResult
+ → envoi #RelayResult (Kind: TEST_SESSION)
 ```
 
 La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Cela évite de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.

@@ -143,6 +143,7 @@ def test_persistent_test_session_open_actions_close_keeps_same_process():
     assert result.operation == "OPENED"
     assert result.session_active is True
     assert result.llm_restored is True
+    assert result.session_state == "ACTIVE_BACKGROUND"
     assert len(result.observations) == 1
     assert session.state == SessionState.ACTIVE_BACKGROUND
     assert proc.poll() is None
@@ -166,6 +167,7 @@ def test_persistent_test_session_open_actions_close_keeps_same_process():
     action_result = wait_done(action_results)
     assert action_result.status == ExecutionStatus.SUCCESS
     assert action_result.session_active is True
+    assert action_result.session_state == "ACTIVE_BACKGROUND"
     assert action_result.session_id == "sess-1"
     assert action_result.actions_completed == len(actions)
     assert proc.poll() is None
@@ -186,6 +188,7 @@ def test_persistent_test_session_open_actions_close_keeps_same_process():
     assert close_result.status == ExecutionStatus.SUCCESS
     assert close_result.operation == "CLOSED"
     assert close_result.session_active is False
+    assert close_result.session_state == "CLOSED"
     assert close_result.llm_restored is True
     assert session.state == SessionState.CLOSED
     assert proc.poll() == 0
@@ -235,7 +238,10 @@ def test_format_test_session_result_explains_persistence_and_visual_attachment()
             observations=[TargetObservation(1, "after", image, 5, 4)],
         )
     )
-    assert "#TestSessionResult" in result
+    assert result.startswith("#RelayResult\nProtocol: 2\nKind: TEST_SESSION")
+    assert "LegacyMarker: #TestSessionResult" in result
+    assert "SessionState: ACTIVE_BACKGROUND" in result
+    assert "RecommendedNext: TEST_ACTIONS,CLOSE_TEST_SESSION" in result
     assert "SessionActive: YES" in result
     assert "Operation: ACTIONS" in result
     assert "#VisualObservation" in result

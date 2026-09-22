@@ -23,6 +23,12 @@ class ProtocolError(ValueError):
 _CONTROL_MARKER_RE = re.compile(
     r"(?mi)^#(Execution|Show|Multiple|OpenTestSession|CloseTestSession|TestActions|End)\s*$"
 )
+_RELAY_LINE_RE = re.compile(r"(?i)^#Relay\s*$")
+_RELAY_META_RE = re.compile(
+    r"^(Protocol|Action|ID|Shell|CWD|Timeout|Launch|Ready)\s*:\s*(.*?)\s*$",
+    re.IGNORECASE,
+)
+_RELAY_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _FENCE_RE = re.compile(r"```(?P<lang>[A-Za-z0-9_+.-]*)\s*\n(?P<body>.*?)\n```", re.DOTALL)
 _META_RE = re.compile(r"(?mi)^(ID|Shell|CWD|Timeout)\s*:\s*(.*?)\s*$")
 _MULTI_META_RE = re.compile(r"^(ID|Shell|CWD|Timeout|Launch|Ready)\s*:\s*(.*?)\s*$", re.IGNORECASE)
@@ -188,6 +194,190 @@ def _extract_control_body(text: str, marker_match: re.Match[str]) -> tuple[str, 
         if fence.start("body") <= marker_match.start() < fence.end("body"):
             return fence.group("body"), fence.group("lang").lower()
     return text[marker_match.start():].strip(), ""
+
+
+def _extract_relay_v2_body(text: str) -> tuple[str, str] | None:
+    """Return one canonical #Relay body.
+
+    Canonical directives are recognized only when #Relay is the first non-empty
+    line of the copied payload or appears inside one fenced code block. A bare
+    #Relay mentioned later in prose is ignored, reducing accidental activation.
+    """
+    candidates: list[tuple[str, str]] = []
+    for fence in _FENCE_RE.finditer(text):
+        lines = [line.strip() for line in fence.group("body").splitlines() if line.strip()]
+        if lines and _RELAY_LINE_RE.fullmatch(lines[0]):
+            candidates.append((fence.group("body"), fence.group("lang").lower()))
+
+    stripped = text.strip()
+    if stripped:
+        first = stripped.splitlines()[0].strip()
+        if _RELAY_LINE_RE.fullmatch(first):
+            candidates.append((stripped, ""))
+
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise ProtocolError("Plusieurs directives #Relay détectées. Une seule directive est autorisée par message.")
+    return candidates[0]
+
+
+def _parse_relay_v2(
+    text: str,
+    body: str,
+    fence_language: str,
+    default_shell: str,
+    max_timeout: int,
+) -> AgentDirective:
+    lines = body.splitlines()
+    marker_index = next((i for i, line in enumerate(lines) if _RELAY_LINE_RE.fullmatch(line.strip())), None)
+    if marker_index is None:
+        raise ProtocolError("Marqueur #Relay absent du bloc canonique.")
+
+    metadata: dict[str, str] = {}
+    payload_start: int | None = None
+    for idx in range(marker_index + 1, len(lines)):
+        line = lines[idx]
+        if not line.strip():
+            payload_start = idx + 1
+            break
+        match = _RELAY_META_RE.fullmatch(line.strip())
+        if not match:
+            raise ProtocolError(
+                "Format #Relay V2 invalide : seules les métadonnées Key: Value sont autorisées avant la ligne vide."
+            )
+        key = match.group(1).lower()
+        if key in metadata:
+            raise ProtocolError(f"Métadonnée #Relay dupliquée : {match.group(1)}")
+        metadata[key] = match.group(2).strip()
+
+    payload_lines = lines[payload_start:] if payload_start is not None else []
+    payload = "\n".join(payload_lines).strip()
+
+    if metadata.get("protocol") != "2":
+        raise ProtocolError("#Relay requiert Protocol: 2.")
+    action = metadata.get("action", "").strip().upper()
+    if not action:
+        raise ProtocolError("#Relay requiert Action:.")
+    request_id = metadata.get("id", "").strip()
+    if not request_id or not _RELAY_ID_RE.fullmatch(request_id):
+        raise ProtocolError("#Relay requiert un ID de 1 à 80 caractères [A-Za-z0-9_.:-].")
+
+    allowed_by_action = {
+        "EXECUTION": {"protocol", "action", "id", "shell", "cwd", "timeout"},
+        "OPEN_TEST_SESSION": {"protocol", "action", "id", "shell", "cwd", "timeout", "launch", "ready"},
+        "TEST_ACTIONS": {"protocol", "action", "id"},
+        "CLOSE_TEST_SESSION": {"protocol", "action", "id"},
+        "TEMP_TEST": {"protocol", "action", "id", "shell", "cwd", "timeout", "launch"},
+        "SHOW": {"protocol", "action", "id", "shell", "cwd", "timeout"},
+        "END": {"protocol", "action", "id"},
+    }
+    allowed = allowed_by_action.get(action)
+    if allowed is None:
+        raise ProtocolError(
+            "Action #Relay inconnue. Utilisez EXECUTION, OPEN_TEST_SESSION, TEST_ACTIONS, "
+            "CLOSE_TEST_SESSION, TEMP_TEST, SHOW ou END."
+        )
+    unexpected = sorted(set(metadata) - allowed)
+    if unexpected:
+        raise ProtocolError(
+            f"Métadonnée(s) interdite(s) pour Action: {action} : {', '.join(unexpected)}."
+        )
+
+    request_meta = {
+        key: value
+        for key, value in metadata.items()
+        if key in {"id", "shell", "cwd", "timeout"}
+    }
+
+    if action in {"EXECUTION", "SHOW"}:
+        if not payload:
+            raise ProtocolError(f"Action: {action} requiert une commande après la ligne vide.")
+        request = _request_from_parts(
+            command=payload,
+            metadata=request_meta,
+            raw_text=text,
+            default_shell=default_shell,
+            max_timeout=max_timeout,
+            fence_language=fence_language,
+        )
+        kind = DirectiveKind.EXECUTION if action == "EXECUTION" else DirectiveKind.SHOW
+        return AgentDirective(kind=kind, request=request, raw_text=text, request_id=request.request_id)
+
+    if action == "OPEN_TEST_SESSION":
+        launch = metadata.get("launch", "").strip()
+        if not launch:
+            raise ProtocolError("Action: OPEN_TEST_SESSION requiert Launch:.")
+        request = _request_from_parts(
+            command=launch,
+            metadata=request_meta,
+            raw_text=text,
+            default_shell=default_shell,
+            max_timeout=max_timeout,
+            fence_language=fence_language,
+        )
+        actions = _parse_action_lines(payload_lines, allow_empty=True) if payload_start is not None else ()
+        return AgentDirective(
+            kind=DirectiveKind.OPEN_TEST_SESSION,
+            request=request,
+            actions=actions,
+            raw_text=text,
+            request_id=request.request_id,
+            ready=_parse_ready(metadata.get("ready", "auto")),
+        )
+
+    if action == "TEST_ACTIONS":
+        actions = _parse_action_lines(payload_lines, allow_empty=False) if payload_start is not None else ()
+        if not actions:
+            raise ProtocolError("Action: TEST_ACTIONS requiert au moins une action après la ligne vide.")
+        return AgentDirective(
+            kind=DirectiveKind.TEST_ACTIONS,
+            actions=actions,
+            raw_text=text,
+            request_id=request_id,
+        )
+
+    if action == "CLOSE_TEST_SESSION":
+        if payload:
+            raise ProtocolError("Action: CLOSE_TEST_SESSION n'accepte pas de payload.")
+        return AgentDirective(
+            kind=DirectiveKind.CLOSE_TEST_SESSION,
+            raw_text=text,
+            request_id=request_id,
+        )
+
+    if action == "TEMP_TEST":
+        launch = metadata.get("launch", "").strip()
+        if not launch:
+            raise ProtocolError("Action: TEMP_TEST requiert Launch:.")
+        actions = _parse_action_lines(payload_lines, allow_empty=False) if payload_start is not None else ()
+        if not actions:
+            raise ProtocolError("Action: TEMP_TEST requiert au moins une action.")
+        request = _request_from_parts(
+            command=launch,
+            metadata=request_meta,
+            raw_text=text,
+            default_shell=default_shell,
+            max_timeout=max_timeout,
+            fence_language=fence_language,
+        )
+        return AgentDirective(
+            kind=DirectiveKind.MULTIPLE,
+            request=request,
+            actions=actions,
+            raw_text=text,
+            request_id=request.request_id,
+        )
+
+    if action == "END":
+        return AgentDirective(
+            kind=DirectiveKind.END,
+            raw_text=text,
+            request_id=request_id,
+            summary=payload,
+        )
+
+    raise ProtocolError(f"Action #Relay non gérée : {action}")
 
 
 def _normalize_key_chord(raw: str) -> str:
@@ -440,8 +630,17 @@ def _parse_single_action_directive(text: str) -> AgentDirective | None:
 
 
 def parse_agent_directive(text: str, default_shell: str = "powershell", max_timeout: int = 1800) -> AgentDirective | None:
-    """Parse exactly one agent control directive from copied chat text."""
+    """Parse exactly one agent control directive from copied chat text.
+
+    Protocol V2 (#Relay) is canonical. Historical V1 markers remain accepted
+    for backwards compatibility with already-started conversations.
+    """
     text = text or ""
+    relay = _extract_relay_v2_body(text)
+    if relay is not None:
+        body, fence_language = relay
+        return _parse_relay_v2(text, body, fence_language, default_shell, max_timeout)
+
     matches = list(_CONTROL_MARKER_RE.finditer(text))
     if not matches:
         return _parse_single_action_directive(text)
@@ -475,10 +674,8 @@ def parse_agent_directive(text: str, default_shell: str = "powershell", max_time
 
 
 def parse_execution(text: str, default_shell: str = "powershell", max_timeout: int = 1800) -> ExecutionRequest | None:
-    """Backward-compatible parser for `#Execution` only."""
+    """Return an execution request from canonical V2 or historical #Execution."""
     text = text or ""
-    if not re.search(r"(?mi)^#Execution\s*$", text):
-        return None
     directive = parse_agent_directive(text, default_shell=default_shell, max_timeout=max_timeout)
     if directive is None:
         return None
@@ -510,14 +707,35 @@ def truncate_output(value: str, limit: int) -> str:
     return f"{value[:keep]}\n\n[OUTPUT TRUNCATED — {removed} characters removed]\n\n{value[-keep:]}"
 
 
+def relay_result_header(
+    kind: str,
+    request_id: str,
+    status: str,
+    legacy_marker: str,
+    recommended_next: str = "",
+) -> list[str]:
+    lines = [
+        "#RelayResult",
+        "Protocol: 2",
+        f"Kind: {kind}",
+        f"LegacyMarker: {legacy_marker}",
+        f"ID: {request_id}",
+        f"Status: {status}",
+    ]
+    if recommended_next:
+        lines.append(f"RecommendedNext: {recommended_next}")
+    return lines
+
+
 def format_result(result: ExecutionResult, goal_reminder: str = "", max_output_chars: int = 100_000) -> str:
     stdout = truncate_output(result.stdout or "", max_output_chars)
     stderr = truncate_output(result.stderr or "", max_output_chars)
-    lines = [
+    lines = relay_result_header(
+        "EXECUTION",
+        result.request_id,
+        result.status.value,
         "#ExecutionResult",
-        "Protocol: 1",
-        f"ID: {result.request_id}",
-        f"Status: {result.status.value}",
+    ) + [
         f"ExitCode: {result.exit_code if result.exit_code is not None else 'N/A'}",
         f"Duration: {result.duration:.2f}s",
         f"CWD: {result.cwd}",
