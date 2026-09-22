@@ -17,7 +17,7 @@ def test_prompt_starts_with_goal_environment_and_simple_control_loop():
     assert "Ship a stable desktop app" in prompt
     assert "Action dans le tableau" in prompt
     assert "UN SEUL bloc copiable" in prompt
-    assert "attends le prochain `#RelayResult`" in prompt
+    assert "Attends le prochain `#RelayResult`" in prompt
     assert "Ne fabrique jamais stdout" in prompt
 
 
