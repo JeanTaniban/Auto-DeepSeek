@@ -381,6 +381,15 @@ def _parse_relay_v2(
 
 
 def _normalize_key_chord(raw: str) -> str:
+    raw = raw.strip()
+    # A single printable character is a valid semantic key. Preserve digits,
+    # punctuation and non-ASCII characters so Win32 can translate them through
+    # the active keyboard layout (e.g. "1" on AZERTY, "é" on French).
+    if len(raw) == 1 and raw.isprintable() and not raw.isspace():
+        if re.fullmatch(r"[A-Za-z]", raw):
+            return raw.upper()
+        return raw
+
     parts = [part.strip().upper() for part in raw.split("+") if part.strip()]
     if not parts:
         raise ProtocolError("#Key vide.")
