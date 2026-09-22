@@ -216,7 +216,7 @@ clipboard_agent/
   state_machine.py    machine Agent Auto
   workspace.py        binding Z-order/workspaces LLM/Target
   test_session.py     TestSession persistante
-  target_session.py   #Multiple temporaire
+  target_session.py   TEMP_TEST temporaire / compatibilité V1
   win32_input.py      Win32 mouse/keyboard/window/capture
   execution.py        commandes/processus
   visual_watch.py     mouvement/stabilité
@@ -245,7 +245,7 @@ Obligatoires :
 - workspaces Z-order/focus ;
 - TestSession open→actions→close avec même processus ;
 - checkpoints et screenshot markers ;
-- `#Multiple` temporaire non régressé ;
+- `TEMP_TEST` + ancien format temporaire V1 non régressés ;
 - intervention souris ;
 - redaction ;
 - démarrage interface Tk ;
