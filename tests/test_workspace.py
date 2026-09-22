@@ -36,6 +36,7 @@ class FakeDesktop:
         self.topmost = []
         self.restored = []
         self.activations = []
+        self.raises = []
         self.point_owners = {(50, 50): 20, (60, 60): 20}
 
     def root_window(self, hwnd): return hwnd
@@ -56,6 +57,7 @@ class FakeDesktop:
         self.foreground = hwnd
     def is_foreground(self, hwnd): return self.foreground == hwnd
     def foreground_window(self): return self.foreground
+    def raise_window(self, hwnd): self.raises.append(hwnd)
 
 
 def _bound_manager(d):
@@ -99,9 +101,11 @@ def test_workspace_target_then_restore_llm_changes_only_focus_and_z_order_once()
     assert d.foreground == 30
     assert d.activations == [30]
     assert d.topmost == [(10, False)]
+    assert d.raises == [30]
     assert manager.ensure_target_workspace(30)
     assert d.activations == [30]
     assert d.topmost == [(10, False)]
+    assert d.raises == [30, 30]
     assert manager.restore_llm_workspace()
     assert d.foreground == 20
     assert d.activations == [30, 20]
@@ -139,3 +143,19 @@ def test_workspace_exposes_precise_focus_failure_reason():
     d.foreground = 30
     assert manager.ensure_llm_workspace() is False
     assert manager.last_error == "Focus LLM non obtenu (attendu=20, foreground=30)."
+
+
+def test_target_already_foreground_is_raised_after_relay_topmost_demotion():
+    d = FakeDesktop()
+    d.windows.append(_info(30, 300, "Target"))
+    d.foreground = 30  # typical freshly launched app: it focused itself
+    manager = _bound_manager(d)
+
+    assert manager.ensure_target_workspace(30) is True
+
+    # No focus repair was needed, but the Target still must be raised after
+    # Relay leaves the topmost band so Relay cannot visually cover startup.
+    assert d.activations == []
+    assert d.topmost == [(10, False)]
+    assert d.raises == [30]
+    assert d.foreground == 30
