@@ -1,6 +1,6 @@
 # Cahier des charges — Auto-DeepSeek / Clipboard Agent Relay
 
-**Version : 2.12**
+**Version : 2.13**
 **Cible principale : Windows 10/11, Python 3.11+**
 
 ## 1. Objectif
@@ -59,49 +59,63 @@ Après interaction, le LLM workspace est restauré et vérifié avant tout clic/
 
 ## 5. Protocole LLM
 
-Une seule directive de contrôle par réponse.
+### 5.1 Format canonique V2
 
-### `#Execution`
+Le chemin nominal expose un seul marqueur top-level :
 
-Commande shell atomique. Retour : `#ExecutionResult`.
+```text
+#Relay
+Protocol: 2
+Action: <ACTION>
+ID: <id-unique>
+...
+```
 
-### `#OpenTestSession`
+Une seule directive de contrôle est autorisée par réponse. Le champ `Action` détermine explicitement la sémantique :
 
-Lance une application avec stdout/stderr capturés et la conserve entre plusieurs tours LLM.
+- `EXECUTION` : commande shell atomique ;
+- `OPEN_TEST_SESSION` : ouverture d’une application persistante ;
+- `TEST_ACTIONS` : actions sur la TestSession active ;
+- `CLOSE_TEST_SESSION` : fermeture de la TestSession ;
+- `TEMP_TEST` : test UI temporaire launch→actions→close ;
+- `SHOW` : démonstration utilisateur et arrêt Auto ;
+- `END` : fin de mission.
 
-Métadonnées : `ID`, `Shell`, `CWD`, `Timeout`, `Launch`, `Ready`.
+Le parser V2 doit :
+- exiger `Protocol: 2`, `Action` et un `ID` valide ;
+- rejeter les actions inconnues ;
+- rejeter les métadonnées incompatibles avec l’action ;
+- reconnaître `#Relay` seulement comme première ligne utile du payload copié ou d’un bloc de code, afin qu’une citation dans de la prose ne déclenche pas le protocole ;
+- traduire la directive V2 vers les modèles internes `DirectiveKind` existants.
 
-Actions initiales optionnelles autorisées, notamment `#Observe`, afin de compacter launch+capture.
+### 5.2 Compatibilité V1
 
-### `#TestActions`
+Les anciens marqueurs restent acceptés afin de ne pas casser les conversations déjà initialisées avec un ancien prompt. Ils ne sont plus enseignés dans le prompt canonique et ne doivent plus être utilisés pour les nouvelles missions.
 
-Exécute 1 à 25 actions sur la TestSession active sans relancer le processus.
+Les alias historiques et raccourcis d’actions restent donc une **couche de compatibilité parser**, pas une surface utilisateur normale.
 
-Actions :
+### 5.3 Résultats V2
 
-- `#Click X;Y` : coordonnées zone cliente ;
-- `#TypeInput "texte"` / alias `#Typeinout` ;
-- `#Key ...` ;
-- `#Wait <ms>` ;
-- `#Observe <label>`.
+Les résultats canoniques commencent par un préambule commun :
 
-Une action unique peut être envoyée seule. `#Multiple` sans `Launch:` est un alias de TestActions.
+```text
+#RelayResult
+Protocol: 2
+Kind: ...
+LegacyMarker: ...
+ID: ...
+Status: ...
+```
 
-### `#CloseTestSession`
+`LegacyMarker` maintient la reconnaissance par les anciens prompts.
 
-Ferme proprement la session, termine l’arbre si nécessaire, récupère stdout/stderr complets, restaure LLM workspace et renvoie `#TestSessionResult`.
+Pour les TestSessions, le résultat expose aussi :
+- `SessionState` : état réel de la session ;
+- `RecommendedNext` : actions recommandées depuis cet état ;
+- `SessionActive` ;
+- `LLMWorkspaceRestored`.
 
-### `#Multiple` avec `Launch:`
-
-Compatibilité V2.11 : session temporaire launch→actions→observations→close→`#MultipleResult`.
-
-### `#Show`
-
-Arrête Auto puis lance une démonstration externe visible/interactif utilisateur.
-
-### `#End`
-
-Fin de mission. Ferme par sécurité une TestSession encore active, arrête Auto et affiche le bilan.
+Le but est que le LLM n’ait pas à reconstruire implicitement la machine d’état à partir de texte libre.
 
 ## 6. Readiness TestSession
 
