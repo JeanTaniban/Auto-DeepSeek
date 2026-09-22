@@ -484,3 +484,29 @@ def test_execution_result_has_common_relay_v2_header():
     assert text.startswith("#RelayResult\nProtocol: 2\nKind: EXECUTION")
     assert "LegacyMarker: #ExecutionResult" in text
     assert "Status: SUCCESS" in text
+
+
+def test_relay_v2_fenced_block_with_intro_is_canonical_and_multiple_blocks_are_rejected():
+    from clipboard_agent.models import DirectiveKind
+    from clipboard_agent.protocol import parse_agent_directive
+
+    fence = chr(96) * 3
+    text = (
+        "Je vérifie le dépôt.\n\n"
+        + fence + "text\n"
+        + "#Relay\nProtocol: 2\nAction: EXECUTION\nID: fenced-v2\nCWD: .\n\ngit status\n"
+        + fence
+    )
+    directive = parse_agent_directive(text)
+    assert directive is not None
+    assert directive.kind == DirectiveKind.EXECUTION
+    assert directive.request is not None
+    assert directive.request.request_id == "fenced-v2"
+
+    duplicate = (
+        fence + "text\n#Relay\nProtocol: 2\nAction: END\nID: one\n" + fence
+        + "\n\n"
+        + fence + "text\n#Relay\nProtocol: 2\nAction: END\nID: two\n" + fence
+    )
+    with pytest.raises(ProtocolError, match="Plusieurs directives #Relay"):
+        parse_agent_directive(duplicate)
