@@ -399,16 +399,16 @@ class AutoSetupDialog(tk.Toplevel):
             bg=PANEL, fg=MUTED, justify="left", wraplength=690, font=("Segoe UI", 9),
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 8))
         target_rows = [
-            ("Timeout détection fenêtre cible", self.target_window_timeout_var, 1.0, 60.0, 0.5),
-            ("Attente après lancement", self.target_launch_settle_var, 0.0, 10.0, 0.1),
+            ("Timeout détection fenêtre cible", self.target_window_timeout_var, 1.0, 180.0, 1.0),
+            ("Attente après lancement", self.target_launch_settle_var, 0.0, 30.0, 0.25),
             ("Délai entre actions Target App", self.target_action_delay_var, 0.0, 5.0, 0.05),
-            ("Timeout fermeture cible", self.target_close_timeout_var, 0.2, 10.0, 0.1),
+            ("Timeout fermeture cible", self.target_close_timeout_var, 0.2, 30.0, 0.25),
             ("Attente après restauration navigateur", self.target_restore_delay_var, 0.0, 5.0, 0.05),
             ("Texte résultat → collage image", self.target_attachment_delay_var, 0.0, 5.0, 0.05),
             ("Image collée → clic Envoyer", self.target_attachment_to_send_var, 0.0, 8.0, 0.05),
-            ("Readiness auto : stabilité visuelle", self.test_ready_stable_var, 0.2, 10.0, 0.1),
-            ("Readiness : période de poll (ms)", self.test_ready_poll_var, 50, 2000, 50),
-            ("Attente après activation Target", self.test_activation_settle_var, 0.0, 5.0, 0.05),
+            ("Readiness auto : stabilité visuelle", self.test_ready_stable_var, 0.2, 30.0, 0.25),
+            ("Readiness : période de poll (ms)", self.test_ready_poll_var, 50, 5000, 50),
+            ("Attente après activation Target", self.test_activation_settle_var, 0.0, 15.0, 0.1),
         ]
         for row, (label, variable, minimum, maximum, increment) in enumerate(target_rows, start=2):
             ttk.Label(target, text=label, style="Panel.TLabel").grid(row=row, column=0, sticky="w", pady=(6, 0))
@@ -697,16 +697,16 @@ class AutoSetupDialog(tk.Toplevel):
             self.timing_jitter_var, self.settings.auto_timing_jitter_percent, 0.0, 50.0
         )
         self.settings.auto_target_window_timeout_seconds = self._bounded_float(
-            self.target_window_timeout_var, self.settings.auto_target_window_timeout_seconds, 1.0, 60.0
+            self.target_window_timeout_var, self.settings.auto_target_window_timeout_seconds, 1.0, 180.0
         )
         self.settings.auto_target_launch_settle_seconds = self._bounded_float(
-            self.target_launch_settle_var, self.settings.auto_target_launch_settle_seconds, 0.0, 10.0
+            self.target_launch_settle_var, self.settings.auto_target_launch_settle_seconds, 0.0, 30.0
         )
         self.settings.auto_target_action_delay_seconds = self._bounded_float(
             self.target_action_delay_var, self.settings.auto_target_action_delay_seconds, 0.0, 5.0
         )
         self.settings.auto_target_close_timeout_seconds = self._bounded_float(
-            self.target_close_timeout_var, self.settings.auto_target_close_timeout_seconds, 0.2, 10.0
+            self.target_close_timeout_var, self.settings.auto_target_close_timeout_seconds, 0.2, 30.0
         )
         self.settings.auto_target_restore_delay_seconds = self._bounded_float(
             self.target_restore_delay_var, self.settings.auto_target_restore_delay_seconds, 0.0, 5.0
@@ -718,13 +718,13 @@ class AutoSetupDialog(tk.Toplevel):
             self.target_attachment_to_send_var, self.settings.auto_target_attachment_to_send_seconds, 0.0, 8.0
         )
         self.settings.auto_test_ready_stable_seconds = self._bounded_float(
-            self.test_ready_stable_var, self.settings.auto_test_ready_stable_seconds, 0.2, 10.0
+            self.test_ready_stable_var, self.settings.auto_test_ready_stable_seconds, 0.2, 30.0
         )
         self.settings.auto_test_ready_poll_ms = int(self._bounded_float(
-            self.test_ready_poll_var, self.settings.auto_test_ready_poll_ms, 50, 2000
+            self.test_ready_poll_var, self.settings.auto_test_ready_poll_ms, 50, 5000
         ))
         self.settings.auto_test_activation_settle_seconds = self._bounded_float(
-            self.test_activation_settle_var, self.settings.auto_test_activation_settle_seconds, 0.0, 5.0
+            self.test_activation_settle_var, self.settings.auto_test_activation_settle_seconds, 0.0, 15.0
         )
         self.settings.auto_copy_template_path = self.copy_template_var.get().strip()
         self.settings.auto_copy_match_threshold = self._bounded_float(
@@ -1837,6 +1837,10 @@ class ClipboardAgentApp(tk.Tk):
             reminder = self.goal_text.get("1.0", "end").strip()
         text = format_test_session_result(result, goal_reminder=reminder, max_output_chars=self.settings.max_output_chars)
         text = redact_secrets(text)
+        if result.stdout:
+            self._append_terminal("[test-session stdout]\n" + result.stdout + ("\n" if not result.stdout.endswith("\n") else ""), "stdout")
+        if result.stderr:
+            self._append_terminal("[test-session stderr]\n" + result.stderr + ("\n" if not result.stderr.endswith("\n") else ""), "stderr")
         sheet = compose_observation_sheet(result.observations)
         kind = {
             "OPENED": DirectiveKind.OPEN_TEST_SESSION,
@@ -2119,8 +2123,9 @@ class ClipboardAgentApp(tk.Tk):
         self.auto_copy_baseline_sequence = None
         self.auto_pending_attachment = None
         self.target_browser_snapshot = None
-        user_owned_desktop = bool(self.user_intervention.is_set() or self.target_interrupted_by_user or self.test_interrupted_by_user)
-        self.workspace.release(restore=not user_owned_desktop)
+        # Never replay saved window geometry when Auto stops. Releasing the
+        # workspace only clears TOPMOST/binding and preserves the user's layout.
+        self.workspace.release(restore=False)
         self.user_intervention.clear()
         self._update_auto_controls()
         if set_status and was_enabled:
