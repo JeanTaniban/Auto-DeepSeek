@@ -658,3 +658,48 @@ def test_new_project_clears_last_result_identity(monkeypatch):
     assert fake.last_result_request_id == ""
     assert fake.processed_request_ids == set()
     assert fake.processed_agent_hashes == set()
+
+
+def test_auto_execution_is_rejected_while_persistent_test_session_is_active(tmp_path: Path):
+    from types import SimpleNamespace
+    from clipboard_agent.test_session import TestSessionState
+
+    class FakeApp:
+        test_session = SimpleNamespace(state=TestSessionState.ACTIVE_BACKGROUND)
+
+        def _stop_auto(self, reason, *, set_status=True):
+            self.stop_reason = reason
+
+        def _show_command(self, *_args):
+            raise AssertionError("EXECUTION must be rejected before command classification/display")
+
+        def _schedule_auto(self, *_args):
+            raise AssertionError("EXECUTION must never be scheduled while TestSession is active")
+
+    req = ExecutionRequest(command="git status --short", shell="bash", request_id="blocked-in-test")
+    fake = FakeApp()
+    ClipboardAgentApp._handle_execution(fake, req, tmp_path, source_auto=True)
+
+    assert "EXECUTION impossible" in fake.stop_reason
+    assert "TEST_ACTIONS" in fake.stop_reason
+    assert "CLOSE_TEST_SESSION" in fake.stop_reason
+
+
+def test_auto_execution_is_rejected_until_lost_test_session_is_closed(tmp_path: Path):
+    from types import SimpleNamespace
+    from clipboard_agent.test_session import TestSessionState
+
+    class FakeApp:
+        test_session = SimpleNamespace(state=TestSessionState.LOST)
+
+        def _stop_auto(self, reason, *, set_status=True):
+            self.stop_reason = reason
+
+        def _show_command(self, *_args):
+            raise AssertionError("LOST TestSession must be cleaned before EXECUTION")
+
+    req = ExecutionRequest(command="git status --short", shell="bash", request_id="blocked-lost")
+    fake = FakeApp()
+    ClipboardAgentApp._handle_execution(fake, req, tmp_path, source_auto=True)
+
+    assert "CLOSE_TEST_SESSION" in fake.stop_reason

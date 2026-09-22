@@ -1275,6 +1275,14 @@ class ClipboardAgentApp(tk.Tk):
         return True
 
     def _handle_execution(self, request: ExecutionRequest, cwd: Path, source_auto: bool) -> None:
+        test_session = getattr(self, "test_session", None)
+        if source_auto and test_session is not None and test_session.state != TestSessionState.CLOSED:
+            self._stop_auto(
+                "Action EXECUTION impossible pendant une TestSession persistante. "
+                "Utilisez TEST_ACTIONS ou CLOSE_TEST_SESSION."
+            )
+            return
+
         decision = classify_command(request.command)
         self.pending_request = request
         self.pending_cwd = cwd
@@ -1315,7 +1323,7 @@ class ClipboardAgentApp(tk.Tk):
 
     def _handle_multiple(self, directive: AgentDirective, cwd: Path, source_auto: bool) -> None:
         test_session = getattr(self, "test_session", None)
-        if test_session is not None and test_session.active:
+        if test_session is not None and test_session.state != TestSessionState.CLOSED:
             if source_auto:
                 self._stop_auto("Action TEMP_TEST impossible pendant une TestSession persistante. Utilisez TEST_ACTIONS ou CLOSE_TEST_SESSION.")
             else:
@@ -1367,8 +1375,8 @@ class ClipboardAgentApp(tk.Tk):
         if not source_auto:
             self._set_status("TESTSESSION", "OPEN_TEST_SESSION est disponible en Agent Auto afin de garantir le workspace/focus.", WARNING)
             return
-        if self.test_session.active:
-            self._stop_auto("Une TestSession est déjà ouverte. Utilisez TEST_ACTIONS ou CLOSE_TEST_SESSION.")
+        if self.test_session.state != TestSessionState.CLOSED:
+            self._stop_auto("Une TestSession existe déjà. Utilisez TEST_ACTIONS si elle est active, ou CLOSE_TEST_SESSION pour la nettoyer.")
             return
         decision = classify_command(request.command)
         self._show_multiple_command(
@@ -1469,7 +1477,7 @@ class ClipboardAgentApp(tk.Tk):
 
     def _handle_show(self, request: ExecutionRequest, cwd: Path, source_auto: bool) -> None:
         test_session = getattr(self, "test_session", None)
-        if test_session is not None and test_session.active:
+        if test_session is not None and test_session.state != TestSessionState.CLOSED:
             if source_auto:
                 self._stop_auto("SHOW refusé pendant une TestSession persistante. Utilisez CLOSE_TEST_SESSION avant SHOW.")
             else:
@@ -1497,7 +1505,7 @@ class ClipboardAgentApp(tk.Tk):
 
     def _handle_end(self, directive: AgentDirective, source_auto: bool) -> None:
         test_session = getattr(self, "test_session", None)
-        if test_session is not None and test_session.active:
+        if test_session is not None and test_session.state != TestSessionState.CLOSED:
             test_session.force_close()
         if source_auto and self.auto_enabled:
             self._stop_auto("Action END reçue.", set_status=False)
@@ -2498,8 +2506,8 @@ class ClipboardAgentApp(tk.Tk):
             if not messagebox.askyesno("Target App en cours", "Une séquence Target App est en cours. L'interrompre et fermer le relais ?"):
                 return
             self.target_runner.cancel()
-        if self.test_session.active:
-            if not messagebox.askyesno("TestSession ouverte", "Une TestSession persistante est encore ouverte. La fermer avec le relais ?"):
+        if self.test_session.state != TestSessionState.CLOSED:
+            if not messagebox.askyesno("TestSession ouverte", "Une TestSession persistante ou perdue existe encore. La fermer avec le relais ?"):
                 return
             self.test_session.force_close()
         if self.executor.running:

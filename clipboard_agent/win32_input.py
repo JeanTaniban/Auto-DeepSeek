@@ -300,6 +300,10 @@ if os.name == "nt":
     user32.GetForegroundWindow.restype = wintypes.HWND
     user32.VkKeyScanW.argtypes = (ctypes.c_wchar,)
     user32.VkKeyScanW.restype = ctypes.c_short
+    user32.GetKeyboardLayout.argtypes = (wintypes.DWORD,)
+    user32.GetKeyboardLayout.restype = wintypes.HANDLE
+    user32.VkKeyScanExW.argtypes = (ctypes.c_wchar, wintypes.HANDLE)
+    user32.VkKeyScanExW.restype = ctypes.c_short
     user32.WindowFromPoint.argtypes = (wintypes.POINT,)
     user32.WindowFromPoint.restype = wintypes.HWND
     user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
@@ -1041,11 +1045,33 @@ class Win32DesktopInput:
             return 0x70 + int(key[1:]) - 1
         raise DesktopAutomationUnavailable(f"Touche non supportée : {name}")
 
-    def _press_layout_character(self, character: str) -> None:
-        """Press one printable character according to the active Windows layout."""
-        scan = int(user32.VkKeyScanW(character))
+    def _keyboard_layout_for_window(self, hwnd: int) -> object:
+        """Return the keyboard layout owned by the target window thread."""
+        self._require_windows()
+        if not self.window_exists(hwnd):
+            raise DesktopAutomationUnavailable("La fenêtre cible n'existe plus pour la traduction clavier.")
+        pid = wintypes.DWORD()
+        thread_id = int(
+            user32.GetWindowThreadProcessId(wintypes.HWND(int(hwnd)), ctypes.byref(pid)) or 0
+        )
+        if not thread_id:
+            raise DesktopAutomationUnavailable("Impossible d'identifier le thread clavier de la fenêtre cible.")
+        layout = user32.GetKeyboardLayout(thread_id)
+        if not layout:
+            raise DesktopAutomationUnavailable("Impossible de lire le layout clavier de la fenêtre cible.")
+        return layout
+
+    def _press_layout_character(self, character: str, target_hwnd: int | None = None) -> None:
+        """Press one printable character using the target window keyboard layout."""
+        if target_hwnd is not None:
+            layout = self._keyboard_layout_for_window(target_hwnd)
+            scan = int(user32.VkKeyScanExW(character, layout))
+        else:
+            # Manual/backward-compatible fallback when no concrete Target HWND
+            # is available. TestSession/TEMP_TEST always pass their target HWND.
+            scan = int(user32.VkKeyScanW(character))
         if scan == -1:
-            # No physical key combination exists in the active layout. Unicode
+            # No physical key combination exists in the selected layout. Unicode
             # injection is still preferable to silently dropping the character.
             self.type_text(character)
             return
@@ -1066,7 +1092,7 @@ class Win32DesktopInput:
         inputs.extend(self._keyboard_input(mod, KEYEVENTF_KEYUP) for mod in reversed(modifiers))
         self._send_inputs(inputs)
 
-    def press_key_chord(self, chord: str) -> None:
+    def press_key_chord(self, chord: str, *, target_hwnd: int | None = None) -> None:
         self._require_windows()
         raw = chord.strip()
         if not raw:
@@ -1083,7 +1109,7 @@ class Win32DesktopInput:
                     self._keyboard_input(vk, KEYEVENTF_KEYUP),
                 ])
             else:
-                self._press_layout_character(raw)
+                self._press_layout_character(raw, target_hwnd=target_hwnd)
             return
 
         parts = [part.strip().upper() for part in raw.split("+") if part.strip()]

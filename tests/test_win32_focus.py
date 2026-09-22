@@ -22,6 +22,9 @@ class _FakeUser32:
         self.foreground_calls = []
         self.bring_calls = []
         self.attach_calls = []
+        self.layout_thread_ids = []
+        self.vk_scan_ex_calls = []
+        self.vk_scan_calls = []
         self.current_foreground = 7
 
     def IsIconic(self, hwnd):
@@ -49,10 +52,23 @@ class _FakeUser32:
         self.bring_calls.append(_hwnd_value(hwnd))
         return 1
 
-    def VkKeyScanW(self, character):
+    def GetKeyboardLayout(self, thread_id):
+        self.layout_thread_ids.append(int(thread_id))
+        return 0x040C
+
+    def VkKeyScanExW(self, character, layout):
+        self.vk_scan_ex_calls.append((character, int(layout)))
         mapping = {
             "1": (1 << 8) | 0x31,  # AZERTY semantic "1" => SHIFT + VK_1
             "é": 0x32,             # French layout semantic accented key
+        }
+        return mapping.get(character, -1)
+
+    def VkKeyScanW(self, character):
+        self.vk_scan_calls.append(character)
+        mapping = {
+            "1": (1 << 8) | 0x31,
+            "é": 0x32,
         }
         return mapping.get(character, -1)
 
@@ -123,9 +139,10 @@ def test_press_key_digit_uses_active_layout_modifiers(monkeypatch):
     sent = []
     monkeypatch.setattr(win32_input, "user32", fake)
     monkeypatch.setattr(desktop, "_require_windows", lambda: None)
+    monkeypatch.setattr(desktop, "window_exists", lambda hwnd: hwnd == 42)
     monkeypatch.setattr(desktop, "_send_inputs", lambda inputs: sent.extend(inputs))
 
-    desktop.press_key_chord("1")
+    desktop.press_key_chord("1", target_hwnd=42)
 
     assert [int(item.ki.wVk) for item in sent] == [
         win32_input.VK_SHIFT,
@@ -139,6 +156,9 @@ def test_press_key_digit_uses_active_layout_modifiers(monkeypatch):
         win32_input.KEYEVENTF_KEYUP,
         win32_input.KEYEVENTF_KEYUP,
     ]
+    assert fake.layout_thread_ids == [222]
+    assert fake.vk_scan_ex_calls == [("1", 0x040C)]
+    assert fake.vk_scan_calls == []
 
 
 def test_press_key_accent_uses_active_layout_key(monkeypatch):
@@ -147,12 +167,32 @@ def test_press_key_accent_uses_active_layout_key(monkeypatch):
     sent = []
     monkeypatch.setattr(win32_input, "user32", fake)
     monkeypatch.setattr(desktop, "_require_windows", lambda: None)
+    monkeypatch.setattr(desktop, "window_exists", lambda hwnd: hwnd == 42)
     monkeypatch.setattr(desktop, "_send_inputs", lambda inputs: sent.extend(inputs))
 
-    desktop.press_key_chord("é")
+    desktop.press_key_chord("é", target_hwnd=42)
 
     assert [int(item.ki.wVk) for item in sent] == [0x32, 0x32]
     assert [int(item.ki.dwFlags) for item in sent] == [0, win32_input.KEYEVENTF_KEYUP]
+    assert fake.layout_thread_ids == [222]
+    assert fake.vk_scan_ex_calls == [("é", 0x040C)]
+    assert fake.vk_scan_calls == []
+
+
+def test_press_key_without_target_uses_current_thread_layout_fallback(monkeypatch):
+    desktop = Win32DesktopInput()
+    fake = _FakeUser32()
+    sent = []
+    monkeypatch.setattr(win32_input, "user32", fake)
+    monkeypatch.setattr(desktop, "_require_windows", lambda: None)
+    monkeypatch.setattr(desktop, "_send_inputs", lambda inputs: sent.extend(inputs))
+
+    desktop.press_key_chord("1")
+
+    assert fake.layout_thread_ids == []
+    assert fake.vk_scan_ex_calls == []
+    assert fake.vk_scan_calls == ["1"]
+    assert len(sent) == 4
 
 
 def test_type_text_emits_utf16_unicode_units(monkeypatch):

@@ -119,6 +119,8 @@ Pour les TestSessions, le résultat expose aussi :
 
 Le but est que le LLM n’ait pas à reconstruire implicitement la machine d’état à partir de texte libre.
 
+Tant que `TestSessionState` n'est pas `CLOSED`, Agent Auto doit refuser les actions incompatibles avec la session persistante (`EXECUTION`, `TEMP_TEST`, `SHOW`, nouvel `OPEN_TEST_SESSION`). Une session active accepte `TEST_ACTIONS`/`CLOSE_TEST_SESSION`; `LOST` exige `CLOSE_TEST_SESSION` avant de poursuivre.
+
 ## 6. Readiness TestSession
 
 Modes :
@@ -186,7 +188,7 @@ Une variation bornée des délais UI peut être configurée pour absorber des la
 - BLOCKED → refus ;
 - Target limitée au PID lancé/descendants ;
 - raccourcis globaux Windows interdits ;
-- `#TypeInput` conserve l'Unicode complet ; un `#Key` caractère simple utilise le layout clavier Windows actif (avec fallback Unicode lorsque nécessaire) ;
+- `#TypeInput` conserve l'Unicode complet ; un `#Key` caractère simple utilise le layout clavier du thread de `TARGET_WINDOW` via `VkKeyScanExW` (avec fallback Unicode lorsque nécessaire) ;
 - aucun HWND arbitraire fourni par le LLM ;
 - impossible de reprendre `PAUSED` automatiquement ;
 - reprise d’une directive déjà traitée uniquement au démarrage Auto avec ID/type exacts ;

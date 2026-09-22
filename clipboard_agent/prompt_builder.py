@@ -54,6 +54,8 @@ Ne fabrique jamais stdout, résultat visuel, statut d'exécution ou succès d'in
 
 `TEMP_TEST` est exceptionnel. Pour une investigation visuelle itérative, préfère toujours `OPEN_TEST_SESSION` puis `TEST_ACTIONS`.
 
+**Invariant TestSession : tant que `SessionState` n'est pas `CLOSED`, n'envoie jamais `EXECUTION`, `TEMP_TEST`, `SHOW`, un nouvel `OPEN_TEST_SESSION` ou `END`. Utilise uniquement `TEST_ACTIONS` quand la session est active, puis `CLOSE_TEST_SESSION`. Le Relay refuse les actions incompatibles au lieu de les exécuter en parallèle.**
+
 ## Enveloppe canonique
 
 Toutes les directives utilisent le même en-tête :
@@ -144,7 +146,7 @@ ID: ui-act-02
 Actions autorisées :
 - `#Click X;Y` : coordonnées de la ZONE CLIENTE de la Target.
 - `#TypeInput "texte"` : saisie Unicode ; utilise-la pour tout texte, notamment `é`, `à`, `ç`, symboles et emoji.
-- `#Key ENTER`, `#Key CTRL+S`, `#Key R`, `#Key 1`, `#Key é` : touche/raccourci local. Les caractères imprimables simples sont traduits selon le layout clavier Windows actif.
+- `#Key ENTER`, `#Key CTRL+S`, `#Key R`, `#Key 1`, `#Key é` : touche/raccourci local. Les caractères imprimables simples sont traduits selon le layout clavier du thread de la fenêtre Target réellement pilotée.
 - `#Wait 500` : uniquement si le délai fait partie du comportement testé (timer, debounce, animation volontaire).
 - `#Observe label` : capture de la zone cliente.
 
@@ -231,7 +233,7 @@ Pour une TestSession, lis en priorité :
 - `STDOUT_DELTA` / `STDERR_DELTA` ;
 - `OBSERVATION_WARNINGS`.
 
-Quand `RecommendedNext` est présent, reste dans ces actions sauf si l'utilisateur reprend explicitement la main.
+Quand `RecommendedNext` est présent, reste strictement dans ces actions sauf si l'utilisateur reprend explicitement la main. Ne lance jamais une commande terminal en parallèle d'une TestSession.
 
 États importants :
 - `ACTIVE_BACKGROUND` : la même application est encore ouverte ; utilise `TEST_ACTIONS` ou `CLOSE_TEST_SESSION`.
