@@ -1,10 +1,35 @@
 @echo off
+setlocal EnableExtensions
 cd /d "%~dp0"
 
-python -c "import cv2, numpy, psutil" >nul 2>&1
+call "%~dp0windows_python.bat"
+if errorlevel 1 (
+  pause
+  exit /b 1
+)
+
+echo Python selectionne : "%CAR_PYTHON_EXE%"
+
+"%CAR_PYTHON_EXE%" -c "import tkinter" >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo ERREUR : Tkinter n'est pas disponible dans cet interpreteur.
+  echo Installe Python Windows 3.11+ depuis python.org avec Tcl/Tk, puis relance.
+  echo Interpreteur detecte : "%CAR_PYTHON_EXE%"
+  pause
+  exit /b 1
+)
+
+"%CAR_PYTHON_EXE%" -c "import cv2, numpy, psutil" >nul 2>&1
 if errorlevel 1 (
   echo Installation des dependances runtime...
-  python -m pip install -r requirements.txt
+  call "%~dp0windows_python.bat" --ensure-pip
+  if errorlevel 1 (
+    pause
+    exit /b 1
+  )
+
+  "%CAR_PYTHON_EXE%" -m pip install -r requirements.txt
   if errorlevel 1 (
     echo Echec de l'installation des dependances.
     pause
@@ -12,19 +37,30 @@ if errorlevel 1 (
   )
 )
 
-python -m PyInstaller --version >nul 2>&1
+"%CAR_PYTHON_EXE%" -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
-  echo PyInstaller n'est pas installe.
-  echo Installez-le avec: python -m pip install pyinstaller
-  pause
-  exit /b 1
+  call "%~dp0windows_python.bat" --ensure-pip
+  if errorlevel 1 (
+    pause
+    exit /b 1
+  )
+  echo Installation de PyInstaller...
+  "%CAR_PYTHON_EXE%" -m pip install pyinstaller
+  if errorlevel 1 (
+    echo Echec de l'installation de PyInstaller.
+    pause
+    exit /b 1
+  )
 )
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name ClipboardAgentRelay main.py
+
+"%CAR_PYTHON_EXE%" -m PyInstaller --noconfirm --clean --onefile --windowed --name ClipboardAgentRelay main.py
 if errorlevel 1 (
   echo Echec du build.
   pause
   exit /b 1
 )
+
 echo.
-echo Build termine: dist\ClipboardAgentRelay.exe
+echo Build termine : dist\ClipboardAgentRelay.exe
 pause
+endlocal
