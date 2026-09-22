@@ -188,7 +188,7 @@ ID: ui-actions-1
 
 Actions de payload : `#Click`, `#TypeInput`, `#Key`, `#Wait`, `#Observe`.
 
-`#TypeInput` injecte du texte Unicode (accents, symboles, emoji). Un `#Key` constitué d'un caractère imprimable simple est traduit selon le layout clavier Windows actif : par exemple `#Key 1` produit le caractère/touche logique `1` même sur AZERTY, et `#Key é` est supporté. Les lettres comme `#Key R` restent des touches brutes adaptées aux raccourcis/jeux.
+`#TypeInput` injecte du texte Unicode (accents, symboles, emoji). Un `#Key` constitué d'un caractère imprimable simple est traduit selon le layout clavier du **thread de la fenêtre Target** via `VkKeyScanExW` : par exemple `#Key 1` produit le caractère/touche logique `1` même si la Target utilise un layout AZERTY, et `#Key é` est supporté. Les lettres comme `#Key R` restent des touches brutes adaptées aux raccourcis/jeux.
 
 `#Wait` est réservé aux délais qui font partie du comportement testé. Il ne doit pas servir à deviner le temps de démarrage ou de rendu.
 
@@ -235,6 +235,8 @@ Status: ...
 
 Les résultats de TestSession ajoutent `SessionState` et `RecommendedNext`. L’agent n’a donc plus à déduire implicitement si la session est encore active ni quel type d’action utiliser ensuite.
 
+Tant que la TestSession n'est pas `CLOSED`, Agent Auto isole cette session : `EXECUTION`, `TEMP_TEST`, `SHOW` et un second `OPEN_TEST_SESSION` sont refusés. Une session active se pilote par `TEST_ACTIONS` puis `CLOSE_TEST_SESSION`; une session `LOST` doit être nettoyée par `CLOSE_TEST_SESSION` avant de poursuivre.
+
 ## Workspaces Target App
 
 Une TestSession possède une fenêtre cible appartenant obligatoirement au processus lancé ou à l’un de ses descendants.
@@ -251,7 +253,7 @@ LLM_WORKSPACE
 
 La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Lors d'un démarrage où la Target s'est déjà mise elle-même foreground, le Relay est d'abord démoté de topmost puis la Target est explicitement remontée dans le Z-order avant readiness/`#Observe startup`. Cela évite que le Relay masque la première capture. Cela évite aussi de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
 
-Les contrôles de workspace sont **non destructifs** : si le bon HWND est déjà au premier plan, ils ne font rien. Un changement de focus ne réapplique pas la géométrie mémorisée et n’utilise `SW_RESTORE` que si la fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
+Les contrôles de workspace sont **non destructifs sur la géométrie** : ils ne déplacent ni ne redimensionnent une fenêtre pour réparer le focus. Côté LLM, un HWND déjà correct reste un no-op. Côté Target, après la démotion topmost du Relay, la Target est explicitement remontée dans le Z-order même si elle était déjà foreground afin de garantir la visibilité de readiness/`#Observe startup`. `SW_RESTORE` n’est utilisé que si une fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
 
 ## Intervention utilisateur
 
