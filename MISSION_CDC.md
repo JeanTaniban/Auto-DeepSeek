@@ -301,3 +301,35 @@ Rendre les interactions de test plus déterministes :
 - Prompt : règle absolue répétée en tête — aucun titre, aucune analyse, aucune phrase avant/après, exactement un `#Relay`.
 - Documentation alignée en V2.14.
 - Validation finale branche : GitHub Actions Ubuntu/Windows × Python 3.11/3.12 entièrement verte.
+
+
+## Mission d'audit — V2.14 fiabilité complète
+
+### Défauts supplémentaires trouvés
+- Une TestSession persistante peut annoncer `RecommendedNext: TEST_ACTIONS,CLOSE_TEST_SESSION`, mais le runtime accepte encore une `Action: EXECUTION` automatique pendant que la Target reste ouverte. Le prompt conseille la bonne transition, sans l'imposer côté logiciel.
+- `VkKeyScanW` traduit un caractère avec le layout clavier du thread appelant. Windows pouvant associer un layout différent au thread de la Target, la traduction d'un caractère imprimable doit utiliser le layout du thread de la fenêtre cible.
+- `STATE_MACHINE.md` contient encore une référence textuelle à V2.13 malgré son en-tête V2.14.
+
+### Objectif
+Fermer les écarts entre les recommandations du protocole, la machine d'état réellement acceptée et l'injection clavier Win32.
+
+### Périmètre
+- Refuser `EXECUTION` en Agent Auto lorsqu'une TestSession persistante est active ; les transitions nominales restent `TEST_ACTIONS` ou `CLOSE_TEST_SESSION`.
+- Pour les caractères `#Key` simples, récupérer le thread de `TARGET_WINDOW`, son `HKL`, puis utiliser `VkKeyScanExW`; conserver `VkKeyScanW` comme fallback lorsqu'aucune Target n'est fournie.
+- Passer explicitement le HWND cible depuis TestSession et TEMP_TEST jusqu'à la couche clavier.
+- Ajouter les tests unitaires et de flux correspondants.
+- Corriger les incohérences documentaires détectées.
+
+### Tests prévus
+- EXECUTION Auto refusée avec TestSession active, sans classification ni planification de commande.
+- EXECUTION Auto toujours autorisée hors TestSession.
+- `#Key 1` et `#Key é` utilisent le HKL du thread Target lorsqu'un HWND est fourni.
+- Fallback sans HWND conserve le comportement `VkKeyScanW`.
+- TestSession et TEMP_TEST transmettent bien leur HWND à `press_key_chord`.
+- Non-régression compile + pytest sur Ubuntu/Windows Python 3.11/3.12.
+
+### Critères de validation
+- Aucune commande EXECUTION automatique ne peut s'intercaler dans une TestSession persistante.
+- Le clavier imprimable est traduit selon la fenêtre réellement pilotée.
+- Les transitions documentées et acceptées par le runtime sont cohérentes.
+- Matrice CI de branche, PR et post-fusion entièrement verte.
