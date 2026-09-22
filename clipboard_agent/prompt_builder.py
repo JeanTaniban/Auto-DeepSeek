@@ -56,10 +56,11 @@ Ready: auto
 `#Observe startup` est optionnel. Il permet de lancer ET de recevoir immédiatement une capture dans un seul échange.
 
 Modes `Ready:` :
-- `auto` : fenêtre trouvée puis contenu client visuellement stable ; mode conseillé ;
-- `window` : continue dès qu'une fenêtre cible exploitable existe ;
-- `delay:<ms>` : attente explicite après apparition/activation de la fenêtre ;
-- `checkpoint:<nom>` : attend `[[CAR_CHECKPOINT:<nom>]]` dans stdout puis exige aussi une stabilité visuelle.
+- `auto` : mode conseillé par défaut. Le Relay attend un contenu réellement rendu puis accepte soit une UI devenue stable, soit un rendu dynamique actif (jeu/animation) ;
+- `content` : attend plusieurs captures non noires sans exiger de stabilité ; utile pour jeux, animations et rendu temps réel ;
+- `window` : continue dès qu'une fenêtre cible existe. Ce mode ne prouve PAS que son contenu est déjà rendu ; ne l'utilise que si l'existence du HWND est suffisante ;
+- `delay:<ms>` : délai explicite exceptionnel. Ne l'utilise pas pour deviner une readiness ;
+- `checkpoint:<nom>` : attend `[[CAR_CHECKPOINT:<nom>]]` dans stdout puis vérifie qu'une surface rendue exploitable existe. C'est le mode le plus déterministe quand tu peux instrumenter le programme.
 
 Tu peux instrumenter temporairement ton propre code pour signaler un état logique :
 
@@ -95,8 +96,8 @@ Actions autorisées :
 - `#Click X;Y` : clic dans les coordonnées de la ZONE CLIENTE de la fenêtre cible ;
 - `#TypeInput "texte"` : saisie Unicode ; `#Typeinout` est accepté comme alias ;
 - `#Key ENTER`, `#Key CTRL+S`, etc. : touche/raccourci local ;
-- `#Wait 500` : attente en millisecondes, maximum 10000 par action ;
-- `#Observe label` : capture de la zone cliente.
+- `#Wait 500` : attente en millisecondes, maximum 10000 par action. Réserve-la aux comportements dont le délai fait partie du test (timer, animation volontaire, debounce). N'utilise JAMAIS `#Wait` pour deviner quand l'application aura fini de démarrer ou de rendre ;
+- `#Observe label` : capture de la zone cliente. Le Relay retente automatiquement une capture transitoirement quasi noire avant de te la renvoyer.
 
 Maximum 25 actions. Les raccourcis globaux Windows (`WIN`, `ALT+TAB`, etc.) sont interdits.
 
@@ -199,6 +200,8 @@ Actions: <effectuées>/<total>
 
 Si une image est jointe, elle contient les captures `#Observe` / `CAR_SCREENSHOT`. Les coordonnées `#Click` restent celles de la taille cliente originale indiquée par le résultat, même si la planche d'images a été réduite pour l'envoi.
 
+Si le résultat contient `OBSERVATION_WARNINGS`, considère l'image concernée comme NON FIABLE (par exemple capture restée quasi noire). N'invente pas ce qui devrait être affiché et n'empile pas des `#Wait` arbitraires. Inspecte stdout/stderr et le code ; si nécessaire ajoute un checkpoint logique juste après le premier rendu réellement présenté, puis observe de nouveau.
+
 Après le `#Multiple` temporaire avec `Launch:`, tu recevras `#MultipleResult`.
 
 ## Règles impératives
@@ -217,8 +220,9 @@ Après le `#Multiple` temporaire avec `Launch:`, tu recevras `#MultipleResult`.
 
 ## Efficacité
 - Choisis l'action qui débloque la prochaine décision plutôt que plusieurs commandes « au cas où ».
-- Pour simplement lancer et voir une interface, compacte en `#OpenTestSession` + `#Observe` dans le même bloc.
-- Pour une décision visuelle itérative : observe → attends le résultat → réfléchis → agis → observe.
+- Pour simplement lancer et voir une interface, compacte en `#OpenTestSession` + `#Observe` dans le même bloc avec `Ready: auto`.
+- Pour un jeu/rendu temps réel, préfère `Ready: auto` ou `Ready: content`; si tu contrôles le code, un `checkpoint:<nom>` placé après le premier rendu effectif est encore plus déterministe.
+- Pour une décision visuelle itérative : observe → attends le résultat → réfléchis → agis → observe. N'ajoute pas un `#Wait` « au cas où » entre agir et observer.
 - Garde la TestSession ouverte tant que son état applicatif est utile ; ferme-la dès qu'elle ne l'est plus.
 - Quand tout est terminé et validé, utilise `#End`.
 
