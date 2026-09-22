@@ -38,6 +38,8 @@ def select_llm_window(z_order: list[WindowInfo], *, relay_hwnd: int, relay_pid: 
 class WorkspaceBinding:
     relay: WindowSnapshot
     llm: WindowSnapshot
+    prompt_point: ScreenPoint
+    send_point: ScreenPoint
 
 
 class WindowWorkspaceManager:
@@ -49,9 +51,12 @@ class WindowWorkspaceManager:
     Z-order and verified foreground ownership.
     """
 
+    _GEOMETRY_TOLERANCE_PX = 24
+
     def __init__(self, desktop: Win32DesktopInput) -> None:
         self.desktop = desktop
         self.binding: WorkspaceBinding | None = None
+        self._relay_topmost: bool | None = None
 
     @property
     def llm_hwnd(self) -> int | None:
@@ -91,8 +96,53 @@ class WindowWorkspaceManager:
         llm_snapshot = self.desktop.snapshot_window(llm_info.hwnd)
         if relay_snapshot is None or llm_snapshot is None:
             raise DesktopAutomationUnavailable("Impossible de mémoriser le workspace LLM.")
-        self.binding = WorkspaceBinding(relay=relay_snapshot, llm=llm_snapshot)
+        self.binding = WorkspaceBinding(
+            relay=relay_snapshot,
+            llm=llm_snapshot,
+            prompt_point=prompt_point,
+            send_point=send_point,
+        )
+        self._relay_topmost = None
         return self.binding
+
+    def _set_relay_topmost(self, enabled: bool) -> None:
+        binding = self.binding
+        if binding is None or self._relay_topmost is enabled:
+            return
+        self.desktop.set_window_topmost(binding.relay.hwnd, enabled)
+        self._relay_topmost = enabled
+
+    def _llm_geometry_is_stable(self) -> bool:
+        binding = self.binding
+        if binding is None:
+            return False
+        try:
+            current = self.desktop.window_rect(binding.llm.hwnd)
+        except DesktopAutomationUnavailable:
+            return False
+        expected = binding.llm.rect
+        tolerance = self._GEOMETRY_TOLERANCE_PX
+        return all(
+            abs(a - b) <= tolerance
+            for a, b in (
+                (current.left, expected.left),
+                (current.top, expected.top),
+                (current.right, expected.right),
+                (current.bottom, expected.bottom),
+            )
+        )
+
+    def _llm_points_are_still_owned(self) -> bool:
+        binding = self.binding
+        if binding is None:
+            return False
+        try:
+            return (
+                self.desktop.window_at_point(binding.prompt_point) == binding.llm.hwnd
+                and self.desktop.window_at_point(binding.send_point) == binding.llm.hwnd
+            )
+        except DesktopAutomationUnavailable:
+            return False
 
     def ensure_llm_workspace(self) -> bool:
         binding = self.binding
@@ -100,25 +150,32 @@ class WindowWorkspaceManager:
             return False
         if not self.desktop.window_exists(binding.llm.hwnd) or not self.desktop.window_exists(binding.relay.hwnd):
             return False
-        # Relay remains visible but must never own keyboard focus. It is kept
-        # topmost without activation, then LLM is explicitly activated.
+        # Fast no-op when already correct. If focus must be repaired, only
+        # foreground/Z-order change; saved geometry is never reapplied here.
         try:
-            self.desktop.restore_window(binding.relay)
-            self.desktop.set_window_topmost(binding.relay.hwnd, True)
-            if not self.desktop.restore_window(binding.llm):
+            self._set_relay_topmost(True)
+            if not self.desktop.is_foreground(binding.llm.hwnd):
+                self.desktop.activate_window(binding.llm.hwnd)
+            if not self.desktop.is_foreground(binding.llm.hwnd):
                 return False
-            self.desktop.activate_window(binding.llm.hwnd)
-            return self.desktop.is_foreground(binding.llm.hwnd)
+            if not self._llm_geometry_is_stable():
+                return False
+            return self._llm_points_are_still_owned()
         except DesktopAutomationUnavailable:
             return False
 
     def ensure_target_workspace(self, target_hwnd: int) -> bool:
         binding = self.binding
-        if binding is None or not self.desktop.window_exists(target_hwnd):
+        if (
+            binding is None
+            or not self.desktop.window_exists(binding.relay.hwnd)
+            or not self.desktop.window_exists(target_hwnd)
+        ):
             return False
         try:
-            self.desktop.set_window_topmost(binding.relay.hwnd, False)
-            self.desktop.activate_window(target_hwnd)
+            self._set_relay_topmost(False)
+            if not self.desktop.is_foreground(target_hwnd):
+                self.desktop.activate_window(target_hwnd)
             return self.desktop.is_foreground(target_hwnd)
         except DesktopAutomationUnavailable:
             return False
@@ -129,6 +186,7 @@ class WindowWorkspaceManager:
     def release(self, *, restore: bool = True) -> None:
         binding = self.binding
         self.binding = None
+        self._relay_topmost = None
         if binding is None:
             return
         try:

@@ -823,7 +823,14 @@ class Win32DesktopInput:
         self._require_windows()
         if not self.window_exists(hwnd):
             raise DesktopAutomationUnavailable("La fenêtre cible n'existe plus.")
-        user32.ShowWindow(wintypes.HWND(hwnd), SW_RESTORE)
+        if self.is_foreground(hwnd):
+            return
+        # SW_RESTORE must only be used for an actually minimized window.
+        # Calling it on every focus check can unmaximize/reposition the app
+        # just before a click or capture.
+        if user32.IsIconic(wintypes.HWND(hwnd)):
+            user32.ShowWindow(wintypes.HWND(hwnd), SW_RESTORE)
+            time.sleep(0.03)
         if not user32.SetForegroundWindow(wintypes.HWND(hwnd)):
             # Windows may deny focus stealing transiently. A click on the target
             # client will still focus it, but keyboard-only actions must fail safe.
@@ -888,12 +895,14 @@ class Win32DesktopInput:
 
     def click_window_client(self, hwnd: int, x: int, y: int) -> ScreenPoint:
         self._require_windows()
+        # Focus first, then resolve client coordinates. If a minimized target
+        # had to be restored, its client rectangle may have changed.
+        self.activate_window(hwnd)
         client = self.client_rect_screen(hwnd)
         if x < 0 or y < 0 or x >= client.width or y >= client.height:
             raise DesktopAutomationUnavailable(
                 f"#Click ({x},{y}) sort de la zone cliente {client.width}x{client.height} de la cible."
             )
-        self.activate_window(hwnd)
         point = ScreenPoint(client.left + int(x), client.top + int(y))
         self.click(point)
         return point

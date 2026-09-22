@@ -212,6 +212,8 @@ LLM_WORKSPACE
 
 La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Cela évite de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
 
+Les contrôles de workspace sont **non destructifs** : si le bon HWND est déjà au premier plan, ils ne font rien. Un changement de focus ne réapplique pas la géométrie mémorisée et n’utilise `SW_RESTORE` que si la fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
+
 ## Intervention utilisateur
 
 Tout mouvement physique de souris pendant Agent Auto est prioritaire :
