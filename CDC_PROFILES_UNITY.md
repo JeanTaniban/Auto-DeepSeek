@@ -463,7 +463,7 @@ Status: SUCCESS
 Profile: unity
 Provider: unity
 Tool: status
-ProfileState: READY_EDIT
+ProfileState: EDITOR_READY
 RecommendedNext: TOOL,EXECUTION
 
 DATA:
@@ -595,7 +595,7 @@ Responsabilités :
 - séparer stdout et stderr ;
 - mapper les exit codes ;
 - supporter cancellation et timeout ;
-- redacter les données sensibles ;
+- expurger/redacter les données sensibles ;
 - découvrir la surface avec `unity commands --format json`.
 
 Le provider ne doit pas parser les sorties humaines lorsque l’équivalent machine-readable existe.
@@ -1726,7 +1726,7 @@ Références consultées lors de la rédaction de ce CDC :
   https://docs.unity.com/en-us/unity-cli
 
 - Unity CLI — référence commandes, formats structurés et exit codes :  
-  https://docs.unity.com/ja-jp/unity-cli/unity-cli-reference
+  https://docs.unity.com/en-us/unity-cli/unity-cli-reference
 
 - Unity CLI — release notes, notamment `commands --format json`, `shell --protocol ndjson`, tests, builds, jobs et skill :  
   https://docs.unity.com/en-us/unity-cli/release-notes
@@ -1735,7 +1735,7 @@ Références consultées lors de la rédaction de ce CDC :
   https://docs.unity.com/en-us/unity-production-pipeline/local-tools-cli/unity-pipeline-package
 
 - Comparaison Unity CLI / Pipeline :  
-  https://docs.unity.com/zh-cn/unity-production-pipeline/local-tools-cli/unity-cli-pipeline-package
+  https://docs.unity.com/en-us/unity-production-pipeline/local-tools-cli/unity-cli-pipeline-package
 
 - Unity Production Pipeline / local tools :  
   https://docs.unity.com/en-us/unity-production-pipeline/local-tools-cli
