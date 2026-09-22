@@ -290,7 +290,7 @@ def _parse_action_lines(lines: list[str], *, allow_empty: bool = False) -> tuple
 
 def _parse_ready(value: str) -> str:
     ready = (value or "auto").strip().lower()
-    if ready in {"auto", "window"}:
+    if ready in {"auto", "content", "window"}:
         return ready
     delay = re.fullmatch(r"delay\s*:\s*(\d+)", ready)
     if delay:
@@ -301,7 +301,7 @@ def _parse_ready(value: str) -> str:
     checkpoint = re.fullmatch(r"checkpoint\s*:\s*([A-Za-z0-9_.:-]{1,80})", ready)
     if checkpoint:
         return f"checkpoint:{checkpoint.group(1)}"
-    raise ProtocolError("Ready invalide. Utilisez auto, window, delay:<ms> ou checkpoint:<nom>.")
+    raise ProtocolError("Ready invalide. Utilisez auto, content, window, delay:<ms> ou checkpoint:<nom>.")
 
 
 def _parse_sequence_directive(

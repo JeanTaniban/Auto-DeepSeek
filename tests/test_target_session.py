@@ -6,6 +6,7 @@ from clipboard_agent.models import ExecutionRequest, ExecutionStatus, Interactio
 from clipboard_agent.target_session import (
     TargetObservation,
     TargetSessionRunner,
+    capture_target_observation,
     compose_observation_sheet,
     format_multiple_result,
 )
@@ -174,3 +175,50 @@ def test_observation_sheet_uses_one_documented_scale():
     # 3000 -> 1500 means a 0.5 render scale, plus the fixed header.
     assert sheet.shape[1] == 1500
     assert sheet.shape[0] == 552
+
+
+def test_observe_retries_transient_black_frame_and_keeps_rendered_content():
+    target = WindowInfo(100, 4242, "Demo", ScreenRect(0, 0, 80, 60), ScreenRect(0, 0, 80, 60))
+
+    class SequenceDesktop:
+        def __init__(self):
+            self.calls = 0
+
+        def capture_window_client(self, _hwnd):
+            self.calls += 1
+            if self.calls == 1:
+                return ScreenFrame(32, 24, bytes([0, 0, 0, 255]) * (32 * 24))
+            return ScreenFrame(32, 24, bytes([20, 90, 180, 255]) * (32 * 24))
+
+    desktop = SequenceDesktop()
+    observation = capture_target_observation(
+        desktop,
+        target,
+        "game",
+        1,
+        retry_seconds=0.2,
+        retry_poll_ms=1,
+    )
+    assert desktop.calls == 2
+    assert observation.capture_attempts == 2
+    assert observation.capture_warning == ""
+    assert observation.capture_non_dark_ratio > 0.9
+
+
+def test_observe_marks_persistent_black_capture_as_unreliable():
+    target = WindowInfo(100, 4242, "Demo", ScreenRect(0, 0, 80, 60), ScreenRect(0, 0, 80, 60))
+
+    class BlackDesktop:
+        def capture_window_client(self, _hwnd):
+            return ScreenFrame(32, 24, bytes([0, 0, 0, 255]) * (32 * 24))
+
+    observation = capture_target_observation(
+        BlackDesktop(),
+        target,
+        "black",
+        1,
+        retry_seconds=0,
+    )
+    assert observation.capture_attempts == 1
+    assert "quasi noire" in observation.capture_warning
+    assert observation.capture_non_dark_ratio == 0.0

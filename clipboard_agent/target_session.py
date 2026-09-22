@@ -13,7 +13,14 @@ import psutil
 from .execution import ExecutionManager
 from .models import ExecutionRequest, ExecutionStatus, InteractionAction, InteractionKind
 from .visual_match import bgra_bytes_to_bgr
-from .win32_input import DesktopAutomationUnavailable, WindowInfo, WindowSnapshot, Win32DesktopInput
+from .win32_input import (
+    DesktopAutomationUnavailable,
+    WindowInfo,
+    WindowSnapshot,
+    Win32DesktopInput,
+    bgra_is_likely_black,
+    bgra_non_dark_ratio,
+)
 
 
 @dataclass(slots=True)
@@ -23,6 +30,70 @@ class TargetObservation:
     image_bgr: np.ndarray
     client_width: int
     client_height: int
+    capture_warning: str = ""
+    capture_non_dark_ratio: float = 0.0
+    capture_attempts: int = 1
+
+
+def capture_target_observation(
+    desktop: Win32DesktopInput,
+    target: WindowInfo,
+    label: str,
+    index: int,
+    *,
+    deadline: float | None = None,
+    retry_seconds: float = 2.5,
+    retry_poll_ms: int = 200,
+) -> TargetObservation:
+    """Capture one target observation, retrying transient near-black frames.
+
+    A black capture is not automatically an application failure: it can happen
+    while a GPU surface is being created or when a capture backend temporarily
+    misses the rendered client. We retry for a bounded interval, retain the most
+    informative frame, then explicitly flag the result if it is still black.
+    """
+    end = time.monotonic() + max(0.0, float(retry_seconds))
+    if deadline is not None:
+        end = min(end, float(deadline))
+
+    best_frame = None
+    best_ratio = -1.0
+    attempts = 0
+    while True:
+        frame = desktop.capture_window_client(target.hwnd)
+        attempts += 1
+        ratio = bgra_non_dark_ratio(frame.pixels)
+        if best_frame is None or ratio > best_ratio:
+            best_frame = frame
+            best_ratio = ratio
+        if not bgra_is_likely_black(frame.pixels):
+            break
+
+        now = time.monotonic()
+        if now >= end:
+            break
+        time.sleep(min(max(0.05, int(retry_poll_ms) / 1000.0), max(0.0, end - now)))
+
+    assert best_frame is not None
+    warning = ""
+    if bgra_is_likely_black(best_frame.pixels):
+        warning = (
+            "Capture restée quasi noire après "
+            f"{attempts} tentative(s). Ne pas déduire l'état visuel de l'application "
+            "à partir de cette image ; inspecter stdout/stderr ou utiliser un checkpoint."
+        )
+
+    image = bgra_bytes_to_bgr(best_frame.pixels, best_frame.width, best_frame.height).copy()
+    return TargetObservation(
+        index=index,
+        label=label or f"observation-{index}",
+        image_bgr=image,
+        client_width=best_frame.width,
+        client_height=best_frame.height,
+        capture_warning=warning,
+        capture_non_dark_ratio=max(0.0, best_ratio),
+        capture_attempts=attempts,
+    )
 
 
 @dataclass(slots=True)
@@ -273,19 +344,21 @@ class TargetSessionRunner:
                         raise _TargetCancelledOrTimeout()
                     logs.append(f"{index}. WAIT {action.wait_ms} ms OK")
                 elif action.kind == InteractionKind.OBSERVE:
-                    frame = self.desktop.capture_window_client(target.hwnd)
-                    image = bgra_bytes_to_bgr(frame.pixels, frame.width, frame.height).copy()
                     label = action.label or f"observation-{len(observations) + 1}"
-                    observations.append(
-                        TargetObservation(
-                            index=len(observations) + 1,
-                            label=label,
-                            image_bgr=image,
-                            client_width=frame.width,
-                            client_height=frame.height,
-                        )
+                    observation = capture_target_observation(
+                        self.desktop,
+                        target,
+                        label,
+                        len(observations) + 1,
+                        deadline=deadline,
                     )
-                    logs.append(f"{index}. OBSERVE {label!r} {frame.width}x{frame.height} OK")
+                    observations.append(observation)
+                    quality = "WARNING near-black" if observation.capture_warning else "OK"
+                    logs.append(
+                        f"{index}. OBSERVE {label!r} "
+                        f"{observation.client_width}x{observation.client_height} "
+                        f"attempts={observation.capture_attempts} {quality}"
+                    )
                 completed = index
 
                 if action.kind != InteractionKind.WAIT and action_delay_seconds > 0:
@@ -394,6 +467,10 @@ def format_multiple_result(result: TargetSessionResult, goal_reminder: str = "")
         lines += ["", "NOTE:", result.note]
     if result.logs:
         lines += ["", "ACTION_LOG:", *result.logs]
+    warnings = [obs for obs in result.observations if obs.capture_warning]
+    if warnings:
+        lines += ["", "OBSERVATION_WARNINGS:"]
+        lines += [f"- Observe {obs.index} ({obs.label}): {obs.capture_warning}" for obs in warnings]
     if result.observations:
         lines += [
             "",
@@ -446,9 +523,10 @@ def compose_observation_sheet(
         card = np.zeros((image.shape[0] + header_h, image.shape[1], 3), dtype=np.uint8)
         card[:] = 28
         card[header_h:] = image
+        warning_tag = " | CAPTURE-WARNING" if obs.capture_warning else ""
         label = (
             f"Observe {obs.index}: {obs.label} | client {obs.client_width}x{obs.client_height} "
-            f"| sheet-scale {scale:.3f}"
+            f"| sheet-scale {scale:.3f}{warning_tag}"
         )
         cv2.putText(card, label[:150], (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (235, 235, 235), 1, cv2.LINE_AA)
         cards.append(card)

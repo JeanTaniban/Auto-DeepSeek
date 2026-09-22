@@ -41,11 +41,14 @@ def test_prompt_explains_persistent_test_session_and_checkpoints():
     assert "#TestActions" in prompt
     assert "SessionActive: YES" in prompt
     assert "Ready: auto" in prompt
+    assert "Ready: content" in prompt
     assert "checkpoint:<nom>" in prompt
     assert "[[CAR_CHECKPOINT:main-window-ready]]" in prompt
     assert "[[CAR_SCREENSHOT:menu-open]]" in prompt
     assert "même application est toujours ouverte" in prompt
     assert "observe → attends le résultat → réfléchis → agis → observe" in prompt
+    assert "N'utilise JAMAIS `#Wait` pour deviner" in prompt
+    assert "OBSERVATION_WARNINGS" in prompt
 
 
 def test_prompt_explains_deterministic_llm_and_target_workspaces():

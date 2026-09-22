@@ -121,3 +121,57 @@ PROCESSING_REPLY
 - Le comportement runtime reste inchangé : l’application choisit déjà `powershell` sous Windows et `bash` ailleurs.
 - Critère de livraison ajouté : matrice GitHub Actions Ubuntu/Windows × Python 3.11/3.12 entièrement verte.
 - Le CI Windows a également exposé que PowerShell ne retransmettait pas automatiquement le code de sortie d’un exécutable natif ; l’invocation non interactive propage désormais `$LASTEXITCODE` afin que `#ExecutionResult` conserve le code exact.
+
+
+## Mission corrective — readiness/capture TestSession avancée
+
+### Problèmes observés
+- Un agent peut encore utiliser `#Wait` avec une durée arbitraire avant `#Observe`, ce qui rend les tests dépendants de timings devinés.
+- `Ready: window` prouve seulement l'existence d'un HWND, pas que le contenu applicatif est réellement rendu.
+- `Ready: auto` et `checkpoint:<nom>` reposent actuellement sur la stabilité visuelle ; une application animée en continu (jeu, rendu temps réel) peut ne jamais devenir stable.
+- Une capture GDI de la zone cliente peut être noire pendant le démarrage ou avec certains moteurs accélérés, sans diagnostic explicite.
+- Le panneau UI affiche encore `MULTIPLE` pour `#OpenTestSession`, ce qui brouille le diagnostic.
+
+### Objectif concret
+Rendre les tests visuels persistants pilotés par l'état réel de la cible plutôt que par des délais arbitraires, et rendre les captures plus robustes/diagnostiquées, notamment pour les applications temps réel.
+
+### Périmètre inclus
+- Faire de `Ready: auto` un mode adaptatif : prêt si l'interface devient stable OU si plusieurs frames non noires indiquent un rendu dynamique actif.
+- Pour `Ready: checkpoint:<nom>`, attendre le checkpoint logique puis une surface rendue exploitable, sans exiger une stabilité impossible pour un jeu.
+- Ajouter `Ready: content` comme mode explicite pour attendre un contenu visuel non noir.
+- Lors d'un `#Observe`, réessayer brièvement une capture noire et conserver la frame la plus informative.
+- Ajouter un fallback Win32 `PrintWindow` lorsque la capture visible de la zone cliente est quasi noire.
+- Remonter un avertissement explicite au LLM si l'observation reste quasi noire après les retries.
+- Guider le prompt agent : ne pas utiliser `#Wait` pour deviner une readiness ; préférer `Ready: auto`, `Ready: content` ou un checkpoint instrumenté.
+- Corriger le libellé UI de `#OpenTestSession`.
+
+### Hors périmètre
+- Implémentation Windows Graphics Capture/Desktop Duplication complète.
+- OCR ou interprétation locale du contenu.
+- Suppression de `#Wait` : il reste utile pour des délais fonctionnels volontairement imposés.
+- Modification des règles de sécurité HWND/processus.
+
+### Briques et tests
+1. **Qualité frame Win32** : détection pure d'une frame quasi noire + fallback `PrintWindow`; tests unitaires des heuristiques et chemin de fallback.
+2. **Readiness adaptative** : tests d'une UI stable, d'un flux animé non noir, d'un flux noir puis rendu, et d'un checkpoint sur rendu dynamique.
+3. **Observe robuste** : tests de retry noir→contenu et avertissement si toutes les captures restent noires.
+4. **Prompt/UI/docs** : tests du prompt et non-régression parser/protocole.
+
+### Critères de validation
+- Aucun `#Wait` arbitraire n'est nécessaire pour le scénario nominal observer→agir→observer.
+- Une application animée en continu peut passer `Ready: auto`.
+- Une capture initialement noire est retentée avant d'être envoyée.
+- Une capture toujours noire est signalée explicitement, sans être présentée comme observation fiable.
+- Suite pytest + compileall + matrice GitHub Actions Ubuntu/Windows Python 3.11/3.12 vertes.
+- Validation physique finale à rejouer sur le PC Windows utilisateur avec le jeu de test.
+
+
+### Validation de la mission corrective
+- Détection/capture noire : heuristique BGRA + fallback Win32 `PrintWindow` testés.
+- Observation : retry borné noir→contenu et avertissement persistant-noir testés.
+- Readiness : `auto` valide désormais les UI stables et les rendus dynamiques ; `content` ajouté ; checkpoint ne requiert plus l'immobilité d'un rendu temps réel.
+- Prompt agent : `#Wait` n'est plus recommandé pour deviner startup/rendu ; les mécanismes état/contenu/checkpoint sont explicitement prioritaires.
+- UI : `#OpenTestSession` n'est plus affiché comme `MULTIPLE`.
+- Documentation : README, CDC global et machine d'état alignés.
+- CI d'intégration avant clôture : Ubuntu/Windows × Python 3.11/3.12, étapes compile + pytest toutes vertes.
+- Limite restante : la capture/focus réels d'un jeu accéléré doivent être rejoués sur le bureau Windows interactif utilisateur ; la CI ne peut pas reproduire cette couche graphique physique.

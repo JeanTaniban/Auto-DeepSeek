@@ -1371,7 +1371,13 @@ class ClipboardAgentApp(tk.Tk):
             self._stop_auto("Une TestSession est déjà ouverte. Utilisez #TestActions ou #CloseTestSession.")
             return
         decision = classify_command(request.command)
-        self._show_multiple_command(request, directive.actions, decision.risk, f"Ready={directive.ready} • {decision.reason}")
+        self._show_multiple_command(
+            request,
+            directive.actions,
+            decision.risk,
+            f"Ready={directive.ready} • {decision.reason}",
+            mode="TESTSESSION OPEN",
+        )
         if decision.risk == RiskLevel.BLOCKED:
             self._stop_auto(f"#OpenTestSession bloqué : {decision.reason}")
             return
@@ -1508,7 +1514,14 @@ class ClipboardAgentApp(tk.Tk):
         risk_color = {RiskLevel.LOW: SUCCESS, RiskLevel.MODIFY: WARNING, RiskLevel.SENSITIVE: DANGER, RiskLevel.BLOCKED: DANGER}[risk]
         self.risk_label.configure(text=f"{risk.value} — {reason}", fg=risk_color)
 
-    def _show_multiple_command(self, request: ExecutionRequest, actions, risk: RiskLevel, reason: str) -> None:
+    def _show_multiple_command(
+        self,
+        request: ExecutionRequest,
+        actions,
+        risk: RiskLevel,
+        reason: str,
+        mode: str = "MULTIPLE",
+    ) -> None:
         lines = [f"Launch: {request.command}", ""]
         for action in actions:
             if action.kind.value == "CLICK":
@@ -1526,7 +1539,7 @@ class ClipboardAgentApp(tk.Tk):
         self.command_text.delete("1.0", "end")
         self.command_text.insert("1.0", "\n".join(lines))
         self.command_text.configure(state="disabled")
-        self.meta_label.configure(text=f"MULTIPLE  •  ID {request.request_id}  •  {len(actions)} actions  •  timeout {request.timeout}s")
+        self.meta_label.configure(text=f"{mode}  •  ID {request.request_id}  •  {len(actions)} actions  •  timeout {request.timeout}s")
         risk_color = {RiskLevel.LOW: SUCCESS, RiskLevel.MODIFY: WARNING, RiskLevel.SENSITIVE: DANGER, RiskLevel.BLOCKED: DANGER}[risk]
         self.risk_label.configure(text=f"{risk.value} — {reason}", fg=risk_color)
 

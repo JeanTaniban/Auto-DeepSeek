@@ -12,10 +12,14 @@ import psutil
 
 from .execution import ExecutionManager
 from .models import ExecutionRequest, ExecutionStatus, InteractionAction, InteractionKind
-from .target_session import TargetObservation, compose_observation_sheet
-from .visual_match import bgra_bytes_to_bgr
+from .target_session import TargetObservation, capture_target_observation, compose_observation_sheet
 from .visual_watch import VisualStabilityTracker, VisualState
-from .win32_input import DesktopAutomationUnavailable, WindowInfo, Win32DesktopInput
+from .win32_input import (
+    DesktopAutomationUnavailable,
+    WindowInfo,
+    Win32DesktopInput,
+    bgra_is_likely_black,
+)
 from .workspace import WindowWorkspaceManager
 
 
@@ -300,14 +304,31 @@ class PersistentTestSession:
                 self._output_cv.wait(timeout=min(0.15, max(0.01, deadline - time.monotonic())))
         return False
 
-    def _wait_visual_stable(
+    def _signature_has_rendered_content(self, target: WindowInfo, signature: bytes) -> bool:
+        """Return True when either screen capture or window fallback sees content."""
+        if not bgra_is_likely_black(signature):
+            return True
+        try:
+            frame = self.desktop.capture_window_client(target.hwnd)
+        except DesktopAutomationUnavailable:
+            return False
+        return not bgra_is_likely_black(frame.pixels)
+
+    def _wait_surface_ready(
         self,
         target: WindowInfo,
         deadline: float,
         *,
         stable_seconds: float,
         poll_ms: int,
-    ) -> bool:
+        mode: str,
+    ) -> str | None:
+        """Wait for rendered content without assuming it must become static.
+
+        Mode auto accepts either a normally stable UI or a continuously-rendered
+        non-black surface such as a game. Mode content only requires repeated
+        evidence of rendered, non-black content.
+        """
         rect = self.desktop.client_rect_screen(target.hwnd)
         baseline = self.desktop.capture_signature(rect)
         tracker = VisualStabilityTracker(
@@ -316,17 +337,39 @@ class PersistentTestSession:
             require_motion=False,
         )
         tracker.start(baseline, time.monotonic())
+        content_streak = 1 if self._signature_has_rendered_content(target, baseline) else 0
+        dynamic_streak = 0
+
         while time.monotonic() < deadline and not self._cancel.is_set():
             time.sleep(max(0.05, int(poll_ms) / 1000.0))
             if not self.desktop.window_exists(target.hwnd):
-                return False
+                return None
             frame = self.desktop.capture_signature(self.desktop.client_rect_screen(target.hwnd))
-            obs = tracker.observe(frame, time.monotonic())
-            if obs.state == VisualState.STABLE:
-                return True
-            if obs.state == VisualState.TIMEOUT:
-                return False
-        return False
+            content_visible = self._signature_has_rendered_content(target, frame)
+            observation = tracker.observe(frame, time.monotonic())
+
+            if content_visible:
+                content_streak += 1
+                if observation.motion_ratio >= tracker.motion_threshold:
+                    dynamic_streak += 1
+                elif observation.state != VisualState.STABLE:
+                    dynamic_streak = max(0, dynamic_streak - 1)
+            else:
+                content_streak = 0
+                dynamic_streak = 0
+
+            if mode == "content" and content_streak >= 2:
+                return "content"
+
+            if mode == "auto":
+                if content_visible and observation.state == VisualState.STABLE:
+                    return "stable"
+                if content_streak >= 3 and dynamic_streak >= 2:
+                    return "dynamic-render"
+
+            if observation.state == VisualState.TIMEOUT:
+                return None
+        return None
 
     def _wait_readiness(
         self,
@@ -337,12 +380,11 @@ class PersistentTestSession:
         visual_stable_seconds: float,
         visual_poll_ms: int,
         settle_seconds: float,
-    ) -> None:
+    ) -> str:
         ready = (ready or "auto").lower()
 
-        # Give the freshly activated window a deterministic short settle period
-        # before evaluating readiness.  This absorbs focus/paint latency without
-        # pretending that a fixed delay alone proves the application is ready.
+        # A short activation settle absorbs focus/paint handoff only. Actual
+        # readiness below is state-based and must not depend on a guessed delay.
         if settle_seconds > 0 and not self._sleep_cancelable(settle_seconds, self._cancel, deadline):
             raise _TestCancelledOrTimeout()
 
@@ -350,51 +392,91 @@ class PersistentTestSession:
             name = ready.split(":", 1)[1]
             if not self._wait_checkpoint(name, deadline):
                 raise DesktopAutomationUnavailable(f"Checkpoint de readiness non reçu : {name}")
-            # A code checkpoint tells us the logical state is ready; require the
-            # actual client surface to settle as well before observing/clicking.
-            if not self._wait_visual_stable(
+            surface = self._wait_surface_ready(
                 target,
                 deadline,
                 stable_seconds=visual_stable_seconds,
                 poll_ms=visual_poll_ms,
-            ):
+                mode="content",
+            )
+            if surface is None:
                 raise DesktopAutomationUnavailable(
-                    f"Checkpoint {name} reçu, mais l'interface n'est pas devenue visuellement stable avant le timeout."
+                    f"Checkpoint {name} reçu, mais aucune surface rendue exploitable n'a été détectée avant le timeout."
                 )
-        elif ready.startswith("delay:"):
+            return f"checkpoint:{name}+{surface}"
+
+        if ready.startswith("delay:"):
             delay_ms = int(ready.split(":", 1)[1])
             if not self._sleep_cancelable(delay_ms / 1000.0, self._cancel, deadline):
                 raise _TestCancelledOrTimeout()
-        elif ready == "auto":
-            if not self._wait_visual_stable(
+            return f"delay:{delay_ms}"
+
+        if ready == "content":
+            surface = self._wait_surface_ready(
                 target,
                 deadline,
                 stable_seconds=visual_stable_seconds,
                 poll_ms=visual_poll_ms,
-            ):
-                raise DesktopAutomationUnavailable("L'interface cible n'est pas devenue visuellement stable avant le timeout.")
-        elif ready != "window":
-            raise DesktopAutomationUnavailable(f"Mode de readiness inconnu : {ready}")
+                mode="content",
+            )
+            if surface is None:
+                raise DesktopAutomationUnavailable(
+                    "Aucun contenu visuel exploitable n'a été détecté dans la fenêtre cible avant le timeout."
+                )
+            return surface
 
-    def _capture_observation(self, target: WindowInfo, label: str, observations: list[TargetObservation]) -> None:
-        frame = self.desktop.capture_window_client(target.hwnd)
-        image = bgra_bytes_to_bgr(frame.pixels, frame.width, frame.height).copy()
+        if ready == "auto":
+            surface = self._wait_surface_ready(
+                target,
+                deadline,
+                stable_seconds=visual_stable_seconds,
+                poll_ms=visual_poll_ms,
+                mode="auto",
+            )
+            if surface is None:
+                raise DesktopAutomationUnavailable(
+                    "La cible n'a produit ni interface stable ni rendu dynamique exploitable avant le timeout."
+                )
+            return surface
+
+        if ready == "window":
+            return "window"
+
+        raise DesktopAutomationUnavailable(f"Mode de readiness inconnu : {ready}")
+
+    def _capture_observation(
+        self,
+        target: WindowInfo,
+        label: str,
+        observations: list[TargetObservation],
+        deadline: float | None = None,
+    ) -> None:
         observations.append(
-            TargetObservation(
-                index=len(observations) + 1,
-                label=label or f"observation-{len(observations) + 1}",
-                image_bgr=image,
-                client_width=frame.width,
-                client_height=frame.height,
+            capture_target_observation(
+                self.desktop,
+                target,
+                label or f"observation-{len(observations) + 1}",
+                len(observations) + 1,
+                deadline=deadline,
             )
         )
 
-    def _capture_pending_screenshots(self, target: WindowInfo, observations: list[TargetObservation]) -> None:
+    def _capture_pending_screenshots(
+        self,
+        target: WindowInfo,
+        observations: list[TargetObservation],
+        deadline: float | None = None,
+    ) -> None:
         with self._lock:
             labels = list(self._pending_screenshots)
             self._pending_screenshots.clear()
         for label in labels:
-            self._capture_observation(target, label or "checkpoint-screenshot", observations)
+            self._capture_observation(
+                target,
+                label or "checkpoint-screenshot",
+                observations,
+                deadline,
+            )
 
     def _execute_actions(
         self,
@@ -407,7 +489,7 @@ class PersistentTestSession:
         logs: list[str],
     ) -> int:
         completed = 0
-        self._capture_pending_screenshots(target, observations)
+        self._capture_pending_screenshots(target, observations, deadline)
         for index, action in enumerate(actions, start=1):
             if self._cancel.is_set() or time.monotonic() >= deadline:
                 raise _TestCancelledOrTimeout()
@@ -434,10 +516,10 @@ class PersistentTestSession:
                     raise _TestCancelledOrTimeout()
                 logs.append(f"{index}. WAIT {action.wait_ms} ms OK")
             elif action.kind == InteractionKind.OBSERVE:
-                self._capture_observation(target, action.label, observations)
+                self._capture_observation(target, action.label, observations, deadline)
                 logs.append(f"{index}. OBSERVE {action.label or '<auto>'} OK")
             completed = index
-            self._capture_pending_screenshots(target, observations)
+            self._capture_pending_screenshots(target, observations, deadline)
             if action.kind != InteractionKind.WAIT and action_delay_seconds > 0:
                 if not self._sleep_cancelable(action_delay_seconds, self._cancel, deadline):
                     raise _TestCancelledOrTimeout()
@@ -480,6 +562,7 @@ class PersistentTestSession:
             note = ""
             completed = 0
             llm_restored = False
+            readiness_detail = ""
             try:
                 on_status("Ouverture de la TestSession…")
                 proc = self.executor.launch_target_captured(request, cwd)
@@ -508,7 +591,7 @@ class PersistentTestSession:
                     raise DesktopAutomationUnavailable("Impossible d'activer le workspace Target App.")
                 self._set_state(TestSessionState.ACTIVE_FOREGROUND)
                 on_status(f"TestSession — attente readiness {ready}…")
-                self._wait_readiness(
+                readiness_detail = self._wait_readiness(
                     target,
                     ready,
                     deadline,
@@ -516,7 +599,7 @@ class PersistentTestSession:
                     visual_poll_ms=visual_poll_ms,
                     settle_seconds=settle_seconds,
                 )
-                self._capture_pending_screenshots(target, observations)
+                self._capture_pending_screenshots(target, observations, deadline)
                 completed = self._execute_actions(
                     target, actions, deadline,
                     action_delay_seconds=action_delay_seconds,
@@ -532,7 +615,10 @@ class PersistentTestSession:
                     )
                 self._set_state(TestSessionState.ACTIVE_BACKGROUND)
                 status = ExecutionStatus.SUCCESS
-                note = "TestSession ouverte et conservée en arrière-plan."
+                note = (
+                    "TestSession ouverte et conservée en arrière-plan. "
+                    f"Readiness validée: {readiness_detail}."
+                )
             except _TestCancelledOrTimeout:
                 cancelled = self._cancel.is_set()
                 status = ExecutionStatus.CANCELLED if cancelled else ExecutionStatus.TIMEOUT
@@ -802,6 +888,10 @@ def format_test_session_result(result: TestSessionResult, goal_reminder: str = "
         "STDERR_DELTA:" if result.operation != "CLOSED" else "STDERR:",
         truncate_output(result.stderr or "", max_output_chars) or "<empty>",
     ]
+    warnings = [obs for obs in result.observations if obs.capture_warning]
+    if warnings:
+        lines += ["", "OBSERVATION_WARNINGS:"]
+        lines += [f"- Observe {obs.index} ({obs.label}): {obs.capture_warning}" for obs in warnings]
     if result.observations:
         lines += [
             "",

@@ -107,10 +107,11 @@ Fin de mission. Ferme par sécurité une TestSession encore active, arrête Auto
 
 Modes :
 
-- `auto` : fenêtre détectée + stabilité visuelle du client ;
-- `window` : fenêtre détectée ;
-- `delay:<ms>` : délai explicite ;
-- `checkpoint:<nom>` : marqueur stdout puis stabilité visuelle.
+- `auto` : fenêtre détectée + contenu rendu ; valide ensuite une UI stable **ou** un rendu dynamique actif ;
+- `content` : plusieurs frames non noires, sans exigence de stabilité ;
+- `window` : fenêtre détectée uniquement ;
+- `delay:<ms>` : délai explicite, non recommandé comme mécanisme de readiness ;
+- `checkpoint:<nom>` : marqueur stdout puis présence d'une surface rendue exploitable.
 
 Un délai de settle après activation est configurable avant évaluation.
 
@@ -125,7 +126,7 @@ Le premier synchronise une readiness. Le second programme une observation à la 
 
 ## 7. Captures visuelles Target
 
-`#Observe` capture uniquement la zone cliente de `TARGET_WINDOW`. Plusieurs captures peuvent être composées en une planche envoyée au LLM. Le redimensionnement éventuel de la planche ne change jamais le repère des futurs `#Click`, qui reste la taille cliente originale indiquée dans le résultat.
+`#Observe` capture uniquement la zone cliente de `TARGET_WINDOW`. Une capture quasi noire déclenche un fallback Win32 puis des retries bornés ; la frame la plus informative est conservée. Si elle reste quasi noire, le résultat la marque explicitement dans `OBSERVATION_WARNINGS` afin qu'elle ne soit pas interprétée comme preuve visuelle fiable. Plusieurs captures peuvent être composées en une planche envoyée au LLM. Le redimensionnement éventuel de la planche ne change jamais le repère des futurs `#Click`, qui reste la taille cliente originale indiquée dans le résultat.
 
 ## 8. Détection réponse LLM
 

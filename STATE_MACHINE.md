@@ -239,3 +239,15 @@ Autres invariants :
 - copie invalide/inchangée non justifiée → arrêt Auto ;
 - nouvelle directive dupliquée en cycle normal → arrêt fail-safe ;
 - reprise d’un dernier résultat uniquement au démarrage Auto avec ID + type exacts.
+
+
+## Readiness adaptative et observations
+
+La readiness d'une TestSession ne dépend plus uniquement d'une interface immobile :
+
+- `Ready: auto` accepte une surface non noire devenue stable ou un rendu dynamique actif sur plusieurs frames ;
+- `Ready: content` attend plusieurs frames non noires sans demander de stabilité ;
+- `Ready: checkpoint:<nom>` attend d'abord le checkpoint logique, puis une surface rendue exploitable ;
+- `Ready: window` ne prouve que l'existence du HWND et reste un mode volontairement faible.
+
+Un `#Observe` quasi noir est retenté de manière bornée. Si aucune frame exploitable n'est obtenue, l'observation reste jointe pour diagnostic mais est annotée `OBSERVATION_WARNINGS`. L'agent ne doit alors ni inventer le contenu attendu ni compenser par des délais arbitraires.

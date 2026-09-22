@@ -130,10 +130,17 @@ Readiness disponibles :
 
 ```text
 Ready: auto
+Ready: content
 Ready: window
 Ready: delay:1500
 Ready: checkpoint:main-window-ready
 ```
+
+- `auto` attend un contenu rendu puis accepte soit une UI stable, soit un rendu dynamique actif ;
+- `content` attend plusieurs frames non noires sans exiger de stabilité, adapté aux jeux/animations ;
+- `window` valide seulement l'existence de la fenêtre ;
+- `delay` reste un mécanisme explicite mais ne doit pas servir à deviner une readiness ;
+- `checkpoint` synchronise l'état logique du programme puis vérifie qu'une surface rendue exploitable existe.
 
 Checkpoint dans le programme testé :
 
@@ -161,6 +168,8 @@ ID: ui-actions-1
 ```
 
 Actions : `#Click`, `#TypeInput` (`#Typeinout` alias), `#Key`, `#Wait`, `#Observe`.
+
+`#Observe` retente automatiquement une capture transitoirement quasi noire et conserve la frame la plus informative. Si l'image reste quasi noire, le résultat contient `OBSERVATION_WARNINGS` afin que l'agent n'interprète pas cette image comme fiable. `#Wait` reste disponible pour les délais qui font réellement partie du test, pas pour deviner le temps de démarrage/rendu.
 
 Une action unique peut être envoyée seule, par exemple :
 
