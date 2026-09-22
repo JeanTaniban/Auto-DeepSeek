@@ -1,6 +1,6 @@
 # Machine d’état — Clipboard Agent Relay V2.14
 
-Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.13 conserve la machine d’état runtime de la V2.12 mais expose au LLM un protocole canonique V2 à enveloppe unique `#Relay`.
+Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.14 conserve la machine d’état runtime typée et expose au LLM un protocole canonique V2 à enveloppe unique `#Relay`.
 
 ## 1. Fenêtres et workspaces
 
@@ -131,6 +131,8 @@ CLOSED
 ```
 
 `LOST` indique que le processus ou sa fenêtre a disparu de manière inattendue.
+
+Invariant d'isolation : tant que l'état TestSession n'est pas `CLOSED`, Agent Auto ne lance pas `EXECUTION`, `TEMP_TEST`, `SHOW` ni un second `OPEN_TEST_SESSION`. Depuis `ACTIVE_BACKGROUND`, la progression nominale est `TEST_ACTIONS` ou `CLOSE_TEST_SESSION`; depuis `LOST`, seule la fermeture/nettoyage est admise avant reprise du travail normal.
 
 ### 6.1 Ouvrir
 
@@ -273,5 +275,5 @@ Cette information est descriptive de l’état réel après traitement. Elle év
 
 - Une réponse de contrôle V2 contient uniquement une directive `#Relay` brute ou un unique bloc fenced qui constitue tout le message. Un bloc `#Relay` entouré de prose est rejeté.
 - `#TypeInput` transporte l'Unicode jusqu'à `SendInput(KEYEVENTF_UNICODE)`.
-- Un `#Key` caractère simple non alphabétique passe par `VkKeyScanW` afin de respecter le layout actif (notamment chiffres AZERTY et caractères accentués), avec fallback Unicode si Windows ne fournit aucune combinaison physique.
+- Un `#Key` caractère simple non alphabétique utilise le layout du thread de `TARGET_WINDOW` via `GetKeyboardLayout` + `VkKeyScanExW` (notamment chiffres AZERTY et caractères accentués), avec fallback `VkKeyScanW` lorsqu'aucun HWND cible n'est disponible puis fallback Unicode si aucune combinaison physique n'existe.
 - Avant readiness/capture/actions, le workspace Target démote le Relay de topmost puis remonte explicitement la Target, y compris si elle était déjà foreground au lancement.
