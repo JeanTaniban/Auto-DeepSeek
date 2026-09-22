@@ -337,7 +337,7 @@ class TargetSessionRunner:
                     logs.append(f"{index}. TYPE_INPUT {len(action.text)} chars OK")
                 elif action.kind == InteractionKind.KEY:
                     self.desktop.activate_window(target.hwnd)
-                    self.desktop.press_key_chord(action.key)
+                    self.desktop.press_key_chord(action.key, target_hwnd=target.hwnd)
                     logs.append(f"{index}. KEY {action.key} OK")
                 elif action.kind == InteractionKind.WAIT:
                     if not self._sleep_cancelable(action.wait_ms / 1000.0, self._cancel, deadline):
