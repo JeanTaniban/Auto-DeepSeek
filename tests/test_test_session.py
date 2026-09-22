@@ -67,8 +67,8 @@ class FakeDesktop:
     def type_text(self, text):
         self.events.append(("type", text))
 
-    def press_key_chord(self, key):
-        self.events.append(("key", key))
+    def press_key_chord(self, key, *, target_hwnd=None):
+        self.events.append(("key", key, target_hwnd))
 
     def capture_window_client(self, hwnd):
         self.events.append(("observe", hwnd))
@@ -173,7 +173,7 @@ def test_persistent_test_session_open_actions_close_keeps_same_process():
     assert proc.poll() is None
     assert ("click", 200, 30, 40) in desktop.events
     assert ("type", "test") in desktop.events
-    assert ("key", "ENTER") in desktop.events
+    assert ("key", "ENTER", 200) in desktop.events
     assert session.state == SessionState.ACTIVE_BACKGROUND
 
     closed = []
