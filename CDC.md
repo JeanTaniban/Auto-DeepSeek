@@ -9,6 +9,10 @@ Fournir un agent de développement local semi-autonome autour d’un LLM utilis�
 
 Le navigateur n’est pas piloté par DOM/API privée. Les interfaces locales reposent sur presse-papiers, capture écran et Win32.
 
+### 1.1 Documents de cadrage spécialisés
+
+- `CDC_PROFILES_UNITY.md` — architecture générique des profils et spécification du premier profil métier Unity.
+
 ## 2. Destination Goal
 
 Chaque projet possède un **Topic / Destination Goal** persistant dans la session. Il est intégré au prompt initial et peut être rappelé périodiquement dans les résultats. L’utilisateur peut recadrer le LLM directement dans le chat.
