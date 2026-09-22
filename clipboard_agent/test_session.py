@@ -56,6 +56,7 @@ class TestSessionResult:
     note: str = ""
     session_active: bool = False
     llm_restored: bool = False
+    session_state: str = ""
 
 
 StatusCallback = Callable[[str], None]
@@ -659,6 +660,7 @@ class PersistentTestSession:
                 note=note,
                 session_active=self.active,
                 llm_restored=llm_restored,
+                session_state=self.state.value,
             ))
 
         self._thread = threading.Thread(target=worker, daemon=True, name="persistent-test-open")
@@ -763,6 +765,7 @@ class PersistentTestSession:
                 note=note,
                 session_active=self.active,
                 llm_restored=llm_restored,
+                session_state=self.state.value,
             ))
 
         self._thread = threading.Thread(target=worker, daemon=True, name="persistent-test-actions")
@@ -848,6 +851,7 @@ class PersistentTestSession:
                 note=note,
                 session_active=False,
                 llm_restored=llm_restored,
+                session_state=self.state.value,
             ))
 
         self._thread = threading.Thread(target=worker, daemon=True, name="persistent-test-close")
@@ -859,15 +863,28 @@ class _TestCancelledOrTimeout(RuntimeError):
 
 
 def format_test_session_result(result: TestSessionResult, goal_reminder: str = "", max_output_chars: int = 100_000) -> str:
-    from .protocol import truncate_output
+    from .protocol import relay_result_header, truncate_output
 
-    lines = [
+    state = result.session_state or ("ACTIVE_BACKGROUND" if result.session_active else "CLOSED")
+    if state == TestSessionState.ACTIVE_BACKGROUND.value:
+        recommended = "TEST_ACTIONS,CLOSE_TEST_SESSION"
+    elif state == TestSessionState.LOST.value:
+        recommended = "CLOSE_TEST_SESSION"
+    elif state == TestSessionState.ACTIVE_FOREGROUND.value:
+        recommended = "NONE_AUTO_PAUSED"
+    else:
+        recommended = "EXECUTION,OPEN_TEST_SESSION,SHOW,END"
+
+    lines = relay_result_header(
+        "TEST_SESSION",
+        result.request_id,
+        result.status.value,
         "#TestSessionResult",
-        "Protocol: 1",
-        f"ID: {result.request_id}",
+        recommended,
+    ) + [
         f"SessionID: {result.session_id or '<none>'}",
         f"Operation: {result.operation}",
-        f"Status: {result.status.value}",
+        f"SessionState: {state}",
         f"SessionActive: {'YES' if result.session_active else 'NO'}",
         f"LLMWorkspaceRestored: {'YES' if result.llm_restored else 'NO'}",
         f"Duration: {result.duration:.2f}s",
