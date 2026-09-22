@@ -61,7 +61,9 @@ def test_prompt_explains_persistent_testing_without_guessing_timings():
     assert "ZONE CLIENTE" in prompt
     assert "saisie Unicode" in prompt
     assert "`é`, `à`, `ç`" in prompt
-    assert "layout clavier Windows actif" in prompt
+    assert "layout clavier du thread de la fenêtre Target" in prompt
+    assert "tant que `SessionState` n'est pas `CLOSED`" in prompt
+    assert "n'envoie jamais `EXECUTION`, `TEMP_TEST`, `SHOW`" in prompt
 
 
 def test_prompt_explains_result_state_and_recommended_next_action():
@@ -73,6 +75,8 @@ def test_prompt_explains_result_state_and_recommended_next_action():
     assert "ACTIVE_BACKGROUND" in prompt
     assert "LOST" in prompt
     assert "OBSERVATION_WARNINGS" in prompt
+    assert "reste strictement dans ces actions" in prompt
+    assert "Ne lance jamais une commande terminal en parallèle d'une TestSession" in prompt
     assert "l'image n'est PAS une preuve visuelle fiable" in prompt
 
 
