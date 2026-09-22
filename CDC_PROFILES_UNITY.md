@@ -595,7 +595,7 @@ Responsabilités :
 - séparer stdout et stderr ;
 - mapper les exit codes ;
 - supporter cancellation et timeout ;
-- expurger/redacter les données sensibles ;
+- expurger les données sensibles des sorties ;
 - découvrir la surface avec `unity commands --format json`.
 
 Le provider ne doit pas parser les sorties humaines lorsque l’équivalent machine-readable existe.
