@@ -49,6 +49,13 @@ class _FakeUser32:
         self.bring_calls.append(_hwnd_value(hwnd))
         return 1
 
+    def VkKeyScanW(self, character):
+        mapping = {
+            "1": (1 << 8) | 0x31,  # AZERTY semantic "1" => SHIFT + VK_1
+            "é": 0x32,             # French layout semantic accented key
+        }
+        return mapping.get(character, -1)
+
     def AttachThreadInput(self, source_tid, target_tid, attach):
         self.attach_calls.append((int(source_tid), int(target_tid), bool(attach)))
         return 1
@@ -108,3 +115,61 @@ def test_activate_window_uses_input_thread_fallback_without_moving_window(monkey
     assert fake.bring_calls == [42]
     assert fake.attach_calls == [(111, 222, True), (111, 222, False)]
     assert fake.current_foreground == 42
+
+
+def test_press_key_digit_uses_active_layout_modifiers(monkeypatch):
+    desktop = Win32DesktopInput()
+    fake = _FakeUser32()
+    sent = []
+    monkeypatch.setattr(win32_input, "user32", fake)
+    monkeypatch.setattr(desktop, "_require_windows", lambda: None)
+    monkeypatch.setattr(desktop, "_send_inputs", lambda inputs: sent.extend(inputs))
+
+    desktop.press_key_chord("1")
+
+    assert [int(item.ki.wVk) for item in sent] == [
+        win32_input.VK_SHIFT,
+        0x31,
+        0x31,
+        win32_input.VK_SHIFT,
+    ]
+    assert [int(item.ki.dwFlags) for item in sent] == [
+        0,
+        0,
+        win32_input.KEYEVENTF_KEYUP,
+        win32_input.KEYEVENTF_KEYUP,
+    ]
+
+
+def test_press_key_accent_uses_active_layout_key(monkeypatch):
+    desktop = Win32DesktopInput()
+    fake = _FakeUser32()
+    sent = []
+    monkeypatch.setattr(win32_input, "user32", fake)
+    monkeypatch.setattr(desktop, "_require_windows", lambda: None)
+    monkeypatch.setattr(desktop, "_send_inputs", lambda inputs: sent.extend(inputs))
+
+    desktop.press_key_chord("é")
+
+    assert [int(item.ki.wVk) for item in sent] == [0x32, 0x32]
+    assert [int(item.ki.dwFlags) for item in sent] == [0, win32_input.KEYEVENTF_KEYUP]
+
+
+def test_type_text_emits_utf16_unicode_units(monkeypatch):
+    desktop = Win32DesktopInput()
+    sent = []
+    monkeypatch.setattr(desktop, "_require_windows", lambda: None)
+    monkeypatch.setattr(desktop, "_send_inputs", lambda inputs: sent.extend(inputs))
+
+    desktop.type_text("é😀")
+
+    # é = U+00E9; 😀 = surrogate pair D83D DE00.
+    assert [int(item.ki.wScan) for item in sent] == [
+        0x00E9, 0x00E9,
+        0xD83D, 0xD83D,
+        0xDE00, 0xDE00,
+    ]
+    assert all(int(item.ki.dwFlags) & win32_input.KEYEVENTF_UNICODE for item in sent)
+    assert [bool(int(item.ki.dwFlags) & win32_input.KEYEVENTF_KEYUP) for item in sent] == [
+        False, True, False, True, False, True,
+    ]
