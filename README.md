@@ -242,7 +242,7 @@ LLM_WORKSPACE
  → TARGET_WORKSPACE
  → actions / captures
  → restauration + vérification LLM_WORKSPACE
- → envoi #TestSessionResult
+ → envoi #RelayResult (Kind: TEST_SESSION)
 ```
 
 La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Cela évite de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
