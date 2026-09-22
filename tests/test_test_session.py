@@ -258,3 +258,52 @@ def test_open_failure_restores_llm_and_returns_process_exit_diagnostics():
     assert result.llm_restored is True
     assert "ExitCode=3" in result.note
     assert workspace.events[-1] == ("llm",)
+
+
+def _animated_signature(value: int) -> bytes:
+    return bytes([value, 20, 220 - value, 255]) * 64
+
+
+def test_auto_readiness_accepts_continuously_rendered_dynamic_surface():
+    session, _proc, desktop, _workspace = make_session()
+    frames = [_animated_signature(30), _animated_signature(180)]
+    counter = {"value": 0}
+
+    def capture_signature(_rect):
+        counter["value"] += 1
+        return frames[counter["value"] % 2]
+
+    desktop.capture_signature = capture_signature
+    detail = session._wait_readiness(
+        desktop.target,
+        "auto",
+        time.monotonic() + 2.0,
+        visual_stable_seconds=5.0,
+        visual_poll_ms=10,
+        settle_seconds=0,
+    )
+    assert detail == "dynamic-render"
+    assert counter["value"] >= 3
+
+
+def test_checkpoint_readiness_requires_content_but_not_visual_stability():
+    session, _proc, desktop, _workspace = make_session()
+    session._checkpoints.append("first-frame")
+    frames = [_animated_signature(20), _animated_signature(190)]
+    counter = {"value": 0}
+
+    def capture_signature(_rect):
+        counter["value"] += 1
+        return frames[counter["value"] % 2]
+
+    desktop.capture_signature = capture_signature
+    detail = session._wait_readiness(
+        desktop.target,
+        "checkpoint:first-frame",
+        time.monotonic() + 2.0,
+        visual_stable_seconds=10.0,
+        visual_poll_ms=10,
+        settle_seconds=0,
+    )
+    assert detail == "checkpoint:first-frame+content"
+    assert counter["value"] >= 2
