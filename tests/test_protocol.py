@@ -330,7 +330,7 @@ ID: act-1
 def test_open_test_session_ready_modes_are_validated():
     from clipboard_agent.protocol import parse_agent_directive
 
-    for ready in ("auto", "window", "delay:1500", "checkpoint:ready-ui"):
+    for ready in ("auto", "content", "window", "delay:1500", "checkpoint:ready-ui"):
         directive = parse_agent_directive(
             f"#OpenTestSession\nID: x\nLaunch: app.exe\nReady: {ready}\n"
         )
