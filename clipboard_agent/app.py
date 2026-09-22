@@ -1233,7 +1233,7 @@ class ClipboardAgentApp(tk.Tk):
 
         This is valid only for the reply already visible at Auto start. The
         exact directive ID and kind must match the latest local result, so no
-        shell command, temporary #Multiple or persistent TestSession action is
+        shell command, TEMP_TEST or persistent TestSession action is
         ever replayed implicitly.
         """
         resumable = {
@@ -1500,10 +1500,10 @@ class ClipboardAgentApp(tk.Tk):
         if test_session is not None and test_session.active:
             test_session.force_close()
         if source_auto and self.auto_enabled:
-            self._stop_auto("#End reçu.", set_status=False)
+            self._stop_auto("Action END reçue.", set_status=False)
         if directive.summary:
             self._append_terminal("\n[agent] Mission terminée :\n" + directive.summary.strip() + "\n", "agent")
-        self._set_status("AGENT TERMINÉ", "#End reçu : le mode automatique est arrêté et la mission est déclarée terminée.", SUCCESS)
+        self._set_status("AGENT TERMINÉ", "Action END reçue : le mode automatique est arrêté et la mission est déclarée terminée.", SUCCESS)
 
     def _show_command(self, request: ExecutionRequest, risk: RiskLevel, reason: str, mode: str) -> None:
         self.command_text.configure(state="normal")
