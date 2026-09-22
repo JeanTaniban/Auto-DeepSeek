@@ -393,7 +393,7 @@ class AutoSetupDialog(tk.Toplevel):
         tk.Label(
             target,
             text=(
-                "Ces timings concernent #Multiple et la TestSession persistante. "
+                "Ces timings concernent TEMP_TEST et la TestSession persistante. "
                 "La fenêtre cible passe au premier plan uniquement pendant les actions ; le workspace LLM est restauré avant chaque réponse."
             ),
             bg=PANEL, fg=MUTED, justify="left", wraplength=690, font=("Segoe UI", 9),
@@ -840,7 +840,7 @@ class ClipboardAgentApp(tk.Tk):
         self.after(self.POLL_MS, self._poll_clipboard)
         self.after(80, self._drain_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._set_status("EN ATTENTE", "Copiez une réponse contenant #Execution, #Multiple, #Show ou #End depuis le LLM.", MUTED)
+        self._set_status("EN ATTENTE", "Copiez une directive canonique #Relay (Protocol: 2) depuis le LLM.", MUTED)
         self._update_auto_controls()
 
     def _build_style(self) -> None:
@@ -1161,7 +1161,7 @@ class ClipboardAgentApp(tk.Tk):
             directive = parse_agent_directive(text, default_shell="powershell" if os.name == "nt" else "bash")
             if directive is None:
                 if source_auto:
-                    self._stop_auto("Le texte copié ne contient aucune directive reconnue (#Execution, #OpenTestSession, #TestActions, #CloseTestSession, #Multiple, #Show, #End).")
+                    self._stop_auto("Le texte copié ne contient aucune directive #Relay V2 reconnue ni ancien format compatible.")
                 return
         except ProtocolError as exc:
             if source_auto:
@@ -1317,14 +1317,14 @@ class ClipboardAgentApp(tk.Tk):
         test_session = getattr(self, "test_session", None)
         if test_session is not None and test_session.active:
             if source_auto:
-                self._stop_auto("#Multiple avec Launch est une session temporaire et ne peut pas démarrer pendant une TestSession persistante. Utilisez #TestActions/#Multiple sans Launch ou #CloseTestSession.")
+                self._stop_auto("Action TEMP_TEST impossible pendant une TestSession persistante. Utilisez TEST_ACTIONS ou CLOSE_TEST_SESSION.")
             else:
                 self._set_status("TESTSESSION ACTIVE", "Fermez d'abord la TestSession persistante.", WARNING)
             return
         request = directive.request
         if request is None:
             if source_auto:
-                self._stop_auto("#Multiple reçu sans commande de lancement.")
+                self._stop_auto("Action TEMP_TEST reçue sans commande Launch.")
             return
         decision = classify_command(request.command)
         self.pending_request = request
@@ -1335,26 +1335,26 @@ class ClipboardAgentApp(tk.Tk):
 
         if decision.risk == RiskLevel.BLOCKED:
             if source_auto:
-                self._stop_auto(f"#Multiple bloqué : {decision.reason}", set_status=False)
+                self._stop_auto(f"TEMP_TEST bloqué : {decision.reason}", set_status=False)
             self._set_status("MULTIPLE BLOQUÉ", decision.reason, DANGER)
             self.run_btn.configure(state="disabled")
             self.refuse_btn.configure(state="normal")
             return
         if decision.risk == RiskLevel.SENSITIVE:
             if source_auto:
-                self._pause_auto(f"#Multiple sensible : {decision.reason}")
-            self._set_status("VALIDATION REQUISE", f"#Multiple sensible : {decision.reason}", WARNING)
+                self._pause_auto(f"TEMP_TEST sensible : {decision.reason}")
+            self._set_status("VALIDATION REQUISE", f"TEMP_TEST sensible : {decision.reason}", WARNING)
             self.run_btn.configure(state="normal")
             self.refuse_btn.configure(state="normal")
             return
 
         if source_auto and self.auto_enabled and not self.auto_paused:
-            self._set_status("TARGET APP", f"Séquence #Multiple autorisée ({len(directive.actions)} actions).", PURPLE)
+            self._set_status("TARGET APP", f"Séquence TEMP_TEST autorisée ({len(directive.actions)} actions).", PURPLE)
             self._schedule_auto(100, self._run_pending)
         else:
             # In manual mode UI injection is intentionally explicit even when
             # the launch command itself is low-risk.
-            self._set_status("VALIDATION REQUISE", f"#Multiple : {len(directive.actions)} actions sur l'application cible.", WARNING)
+            self._set_status("VALIDATION REQUISE", f"TEMP_TEST : {len(directive.actions)} actions sur l'application cible.", WARNING)
             self.run_btn.configure(state="normal")
             self.refuse_btn.configure(state="normal")
 
@@ -1362,13 +1362,13 @@ class ClipboardAgentApp(tk.Tk):
         request = directive.request
         if request is None:
             if source_auto:
-                self._stop_auto("#OpenTestSession reçu sans commande Launch.")
+                self._stop_auto("Action OPEN_TEST_SESSION reçue sans commande Launch.")
             return
         if not source_auto:
-            self._set_status("TESTSESSION", "#OpenTestSession est disponible en Agent Auto afin de garantir le workspace/focus.", WARNING)
+            self._set_status("TESTSESSION", "OPEN_TEST_SESSION est disponible en Agent Auto afin de garantir le workspace/focus.", WARNING)
             return
         if self.test_session.active:
-            self._stop_auto("Une TestSession est déjà ouverte. Utilisez #TestActions ou #CloseTestSession.")
+            self._stop_auto("Une TestSession est déjà ouverte. Utilisez TEST_ACTIONS ou CLOSE_TEST_SESSION.")
             return
         decision = classify_command(request.command)
         self._show_multiple_command(
@@ -1379,10 +1379,10 @@ class ClipboardAgentApp(tk.Tk):
             mode="TESTSESSION OPEN",
         )
         if decision.risk == RiskLevel.BLOCKED:
-            self._stop_auto(f"#OpenTestSession bloqué : {decision.reason}")
+            self._stop_auto(f"OPEN_TEST_SESSION bloqué : {decision.reason}")
             return
         if decision.risk == RiskLevel.SENSITIVE:
-            self._pause_auto(f"#OpenTestSession sensible : {decision.reason}")
+            self._pause_auto(f"OPEN_TEST_SESSION sensible : {decision.reason}")
             return
         if not self._transition_auto(AutoState.TEST_OPENING):
             return
@@ -1394,7 +1394,7 @@ class ClipboardAgentApp(tk.Tk):
             return
         request = directive.request
         if request is None:
-            self._stop_auto("#OpenTestSession sans commande de lancement.")
+            self._stop_auto("OPEN_TEST_SESSION sans commande de lancement.")
             return
         self.test_interrupted_by_user = False
         try:
@@ -1420,10 +1420,10 @@ class ClipboardAgentApp(tk.Tk):
             self._set_status("TESTSESSION", "Les actions de TestSession nécessitent Agent Auto pour garantir le focus de la cible.", WARNING)
             return
         if self.test_session.state != TestSessionState.ACTIVE_BACKGROUND:
-            self._stop_auto("Aucune TestSession active en arrière-plan. Utilisez d'abord #OpenTestSession.")
+            self._stop_auto("Aucune TestSession active en arrière-plan. Utilisez d'abord OPEN_TEST_SESSION.")
             return
         if not directive.actions:
-            self._stop_auto("#TestActions ne contient aucune action.")
+            self._stop_auto("TEST_ACTIONS ne contient aucune action.")
             return
         if not self._transition_auto(AutoState.TEST_ACTING):
             return
@@ -1446,7 +1446,7 @@ class ClipboardAgentApp(tk.Tk):
 
     def _handle_close_test_session(self, directive: AgentDirective, source_auto: bool) -> None:
         if not source_auto:
-            self._set_status("TESTSESSION", "#CloseTestSession est géré en Agent Auto.", WARNING)
+            self._set_status("TESTSESSION", "CLOSE_TEST_SESSION est géré en Agent Auto.", WARNING)
             return
         if self.test_session.state not in {TestSessionState.ACTIVE_BACKGROUND, TestSessionState.ACTIVE_FOREGROUND, TestSessionState.LOST}:
             self._stop_auto("Aucune TestSession ouverte à fermer.")
@@ -1471,13 +1471,13 @@ class ClipboardAgentApp(tk.Tk):
         test_session = getattr(self, "test_session", None)
         if test_session is not None and test_session.active:
             if source_auto:
-                self._stop_auto("#Show refusé pendant une TestSession persistante. Utilisez #CloseTestSession avant #Show.")
+                self._stop_auto("SHOW refusé pendant une TestSession persistante. Utilisez CLOSE_TEST_SESSION avant SHOW.")
             else:
-                self._set_status("TESTSESSION ACTIVE", "Fermez d'abord la TestSession persistante avant #Show.", WARNING)
+                self._set_status("TESTSESSION ACTIVE", "Fermez d'abord la TestSession persistante avant SHOW.", WARNING)
             return
         decision = classify_command(request.command)
         if source_auto and self.auto_enabled:
-            self._stop_auto("#Show reçu : Auto arrêté avant ouverture de la démonstration.", set_status=False)
+            self._stop_auto("SHOW reçu : Auto arrêté avant ouverture de la démonstration.", set_status=False)
         self.pending_request = request
         self.pending_cwd = cwd
         self.pending_kind = DirectiveKind.SHOW
@@ -1489,7 +1489,7 @@ class ClipboardAgentApp(tk.Tk):
             self.refuse_btn.configure(state="normal")
             return
         if decision.risk == RiskLevel.SENSITIVE:
-            self._set_status("VALIDATION REQUISE", f"#Show sensible : {decision.reason}", WARNING)
+            self._set_status("VALIDATION REQUISE", f"SHOW sensible : {decision.reason}", WARNING)
             self.run_btn.configure(state="normal")
             self.refuse_btn.configure(state="normal")
             return
@@ -1602,11 +1602,11 @@ class ClipboardAgentApp(tk.Tk):
                 browser_snapshot = self.desktop.snapshot_foreground_window()
         except DesktopAutomationUnavailable as exc:
             if source_auto:
-                self._stop_auto(f"Impossible de mémoriser le navigateur avant #Multiple : {exc}")
+                self._stop_auto(f"Impossible de mémoriser le navigateur avant TEMP_TEST : {exc}")
                 return
 
         if source_auto and browser_snapshot is None:
-            self._stop_auto("Impossible d'identifier la fenêtre navigateur contenant la zone de prompt avant #Multiple.")
+            self._stop_auto("Impossible d'identifier la fenêtre navigateur contenant la zone de prompt avant TEMP_TEST.")
             return
 
         self.target_browser_snapshot = browser_snapshot
@@ -1814,17 +1814,17 @@ class ClipboardAgentApp(tk.Tk):
                     return
             elif self.auto_state != AutoState.TARGET_RESTORING:
                 self._stop_auto(
-                    f"#Multiple terminé dans un état Auto inattendu : {self.auto_state.value}."
+                    f"TEMP_TEST terminé dans un état Auto inattendu : {self.auto_state.value}."
                 )
                 return
             if self.target_browser_snapshot is not None and not result.browser_restored:
                 self._write_clipboard(text)
-                self._stop_auto("#Multiple terminé mais la fenêtre navigateur n'a pas pu être restaurée.", set_status=False)
-                self._set_status("RÉSULTAT PRÊT", "Résultat #Multiple copié, mais reprise Auto impossible : navigateur non restauré.", DANGER)
+                self._stop_auto("TEMP_TEST terminé mais la fenêtre navigateur n'a pas pu être restaurée.", set_status=False)
+                self._set_status("RÉSULTAT PRÊT", "Résultat TEMP_TEST copié, mais reprise Auto impossible : navigateur non restauré.", DANGER)
                 return
             workspace = getattr(self, "workspace", None)
             if workspace is not None and workspace.binding is not None and not workspace.restore_llm_workspace():
-                self._stop_auto("#Multiple terminé mais le workspace LLM n'a pas pu être restauré.")
+                self._stop_auto("TEMP_TEST terminé mais le workspace LLM n'a pas pu être restauré.")
                 return
             self._set_status("AUTO ACTIF", "Target App terminée : renvoi du résultat et des observations au LLM…", PURPLE)
             self._schedule_auto_action(
@@ -1834,7 +1834,7 @@ class ClipboardAgentApp(tk.Tk):
             return
 
         self._write_clipboard(text)
-        detail = "Résultat #Multiple copié. Collez-le au LLM."
+        detail = "Résultat TEMP_TEST copié. Collez-le au LLM."
         if sheet is not None:
             detail += " Les observations visuelles seront jointes automatiquement uniquement en mode Agent Auto."
         self._set_status("RÉSULTAT PRÊT", detail, SUCCESS if result.status == ExecutionStatus.SUCCESS else WARNING)
