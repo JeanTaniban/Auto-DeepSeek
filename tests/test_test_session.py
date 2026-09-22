@@ -73,6 +73,9 @@ class FakeDesktop:
     def capture_window_client(self, hwnd):
         self.events.append(("observe", hwnd))
         image = np.zeros((12, 16, 4), dtype=np.uint8)
+        image[:, :, 0] = 40
+        image[:, :, 1] = 80
+        image[:, :, 2] = 120
         image[:, :, 3] = 255
         return ScreenFrame(16, 12, image.tobytes())
 
