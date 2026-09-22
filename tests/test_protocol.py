@@ -510,3 +510,22 @@ def test_relay_v2_fenced_block_with_intro_is_canonical_and_multiple_blocks_are_r
     )
     with pytest.raises(ProtocolError, match="Plusieurs directives #Relay"):
         parse_agent_directive(duplicate)
+
+
+def test_typeinput_preserves_unicode_and_key_accepts_accented_character():
+    from clipboard_agent.models import InteractionKind
+    from clipboard_agent.protocol import parse_agent_directive
+
+    directive = parse_agent_directive("""#Relay
+Protocol: 2
+Action: TEST_ACTIONS
+ID: unicode-input
+
+#TypeInput "été déjà reçu — 5€ 😀"
+#Key é
+""")
+    assert directive is not None
+    assert directive.actions[0].kind == InteractionKind.TYPE_INPUT
+    assert directive.actions[0].text == "été déjà reçu — 5€ 😀"
+    assert directive.actions[1].kind == InteractionKind.KEY
+    assert directive.actions[1].key == "é"
