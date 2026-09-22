@@ -175,3 +175,68 @@ Rendre les tests visuels persistants pilotés par l'état réel de la cible plut
 - Documentation : README, CDC global et machine d'état alignés.
 - CI d'intégration avant clôture : Ubuntu/Windows × Python 3.11/3.12, étapes compile + pytest toutes vertes.
 - Limite restante : la capture/focus réels d'un jeu accéléré doivent être rejoués sur le bureau Windows interactif utilisateur ; la CI ne peut pas reproduire cette couche graphique physique.
+
+
+## Mission — Protocole V2 lisible et déterministe
+
+### Constat côté agent
+- Le prompt expose trop de variantes de contrôle : marqueurs distincts, alias, raccourcis unitaires et `#Multiple` surchargé.
+- Plusieurs chemins font la même chose, donc l'agent doit mémoriser des exceptions au lieu de choisir une intention simple.
+- Les résultats donnent l'état technique, mais pas toujours la prochaine action recommandée.
+- Les marqueurs de contrôle ressemblent à du texte normal et peuvent être cités accidentellement.
+
+### Constat côté Relay
+- Le parser doit reconnaître plusieurs grammaires et branches selon le marqueur.
+- `#Multiple` change de sémantique selon la présence de `Launch:`.
+- Les raccourcis d'action sans enveloppe explicite réduisent la traçabilité et augmentent les cas de parsing.
+- Les formats de résultat ne partagent pas de préambule commun permettant au LLM de reconnaître rapidement le type de retour.
+
+### Objectif
+Introduire un protocole canonique V2 à enveloppe unique `#Relay`, tout en conservant la compatibilité de lecture des anciens formats. Le prompt initial doit enseigner uniquement ce chemin canonique.
+
+### Format canonique
+Une directive V2 commence par :
+- `#Relay`
+- `Protocol: 2`
+- `Action: <type>`
+- `ID: <id>`
+
+Actions canoniques :
+- `EXECUTION`
+- `OPEN_TEST_SESSION`
+- `TEST_ACTIONS`
+- `CLOSE_TEST_SESSION`
+- `TEMP_TEST`
+- `SHOW`
+- `END`
+
+Les métadonnées restantes dépendent de l'action. Le parser traduit ensuite vers les `DirectiveKind` existants afin de limiter les régressions internes.
+
+### Principes de lisibilité
+- Une seule enveloppe de commande à apprendre.
+- Un tableau de décision compact dans le prompt avant les détails.
+- Aucun alias ni raccourci implicite enseigné à l'agent.
+- Les formats historiques restent acceptés mais sont documentés uniquement comme compatibilité.
+- Chaque résultat canonique contient un préambule commun `#RelayResult / Protocol: 2 / Kind / ID / Status`.
+- Les résultats de TestSession indiquent explicitement `RecommendedNext`.
+
+### Fiabilité
+- Rejeter les actions V2 inconnues avec une erreur explicite.
+- Rejeter les métadonnées V2 incompatibles avec l'action choisie.
+- Conserver les protections existantes : ID anti-doublon, CWD, classification sécurité, HWND/processus, transitions d'état.
+- Ne pas supprimer les parsers V1 dans cette mission.
+
+### Tests prévus
+1. Parser V2 pour chaque action canonique.
+2. Rejet action inconnue, protocol incorrect, métadonnée invalide et directives multiples.
+3. Équivalence V2 → mêmes `DirectiveKind` / modèles internes que V1.
+4. Prompt : tableau de décision, enveloppe unique, absence d'enseignement des alias historiques.
+5. Résultats : préambule V2 commun et `RecommendedNext` TestSession.
+6. Non-régression complète de la suite V1.
+
+### Critères de validation
+- Le chemin nominal documenté ne nécessite de connaître qu'un marqueur top-level : `#Relay`.
+- `#Multiple`, `#Typeinout` et les actions unitaires n'apparaissent plus comme options normales dans le prompt.
+- Tous les anciens tests de compatibilité passent.
+- Compile + pytest verts sur Ubuntu/Windows Python 3.11/3.12.
+- Fusion sur `main` uniquement après CI verte.
