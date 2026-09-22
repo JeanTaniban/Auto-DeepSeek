@@ -1,6 +1,6 @@
-# Machine d’état — Clipboard Agent Relay V2.12
+# Machine d’état — Clipboard Agent Relay V2.13
 
-Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.12 distingue la machine d’état du **relais LLM** de la durée de vie persistante d’une **TestSession**.
+Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.13 conserve la machine d’état runtime de la V2.12 mais expose au LLM un protocole canonique V2 à enveloppe unique `#Relay`.
 
 ## 1. Fenêtres et workspaces
 
@@ -35,7 +35,7 @@ Le Relay ne cherche plus « Chrome » ou « DeepSeek » par nom. Le HWND lié re
 - `PROCESSING_INITIAL_REPLY`
 - `RECOVERING_LAST_RESULT`
 - `EXECUTING`
-- `TARGET_STARTING` / `TARGET_RUNNING` / `TARGET_RESTORING` : ancien `#Multiple` temporaire avec `Launch:`
+- `TARGET_STARTING` / `TARGET_RUNNING` / `TARGET_RESTORING` : `Action: TEMP_TEST` (ancien format temporaire conservé en compatibilité)
 - `TEST_OPENING` : ouverture d’une TestSession persistante
 - `TEST_ACTING` : actions sur la TestSession persistante
 - `TEST_RESTORING` : retour du workspace Target vers le LLM
@@ -79,7 +79,7 @@ RECOVERING_LAST_RESULT
 SENDING
 ```
 
-Cette récupération couvre `#Execution`, le `#Multiple` temporaire, `#OpenTestSession`, `#TestActions` et `#CloseTestSession`.
+Cette récupération couvre les actions canoniques `EXECUTION`, `TEMP_TEST`, `OPEN_TEST_SESSION`, `TEST_ACTIONS` et `CLOSE_TEST_SESSION` ; les anciens marqueurs sont traduits vers les mêmes types internes.
 
 ## 4. Cycle normal LLM
 
@@ -96,13 +96,13 @@ PROCESSING_REPLY
 
 Les délais d’UI configurables sont séquentiels : résultat→prompt, prompt→collage, collage→Envoyer, Envoyer→surveillance, stabilité→Copier. Les timeouts et durées de stabilité ne sont pas randomisés.
 
-## 5. `#Execution`
+## 5. `Action: EXECUTION`
 
 ```text
 PROCESSING_*
  ↓
 EXECUTING
- ↓ #ExecutionResult réel
+ ↓ #RelayResult Kind: EXECUTION réel
 SENDING
 ```
 
@@ -114,17 +114,17 @@ Machine de durée de vie interne (`clipboard_agent/test_session.py`) :
 
 ```text
 CLOSED
- ↓ #OpenTestSession
+ ↓ Action: OPEN_TEST_SESSION
 OPENING
  ↓ fenêtre + readiness
 ACTIVE_FOREGROUND
  ↓ restauration LLM
 ACTIVE_BACKGROUND
- ↕ #TestActions / action unitaire / #Multiple sans Launch
+ ↕ Action: TEST_ACTIONS
 ACTIVE_FOREGROUND
  ↓ restauration LLM
 ACTIVE_BACKGROUND
- ↓ #CloseTestSession
+ ↓ Action: CLOSE_TEST_SESSION
 CLOSING
  ↓
 CLOSED
@@ -136,7 +136,7 @@ CLOSED
 
 ```text
 PROCESSING_*
- ↓ #OpenTestSession
+ ↓ Action: OPEN_TEST_SESSION
 TEST_OPENING
  ├─ launch avec stdout/stderr capturés
  ├─ détection fenêtre appartenant au PID ou descendants
@@ -147,7 +147,7 @@ TEST_OPENING
  ↓
 TEST_RESTORING
  ↓ LLM_WORKSPACE vérifié
-SENDING  (#TestSessionResult Operation: OPENED)
+SENDING  (#RelayResult Kind: TEST_SESSION / Operation: OPENED)
 ```
 
 Le processus reste ouvert après le résultat si `SessionActive: YES`.
@@ -165,30 +165,30 @@ Un settle configurable après activation absorbe la latence focus/peinture avant
 
 ```text
 PROCESSING_REPLY
- ↓ #TestActions / action unitaire / #Multiple sans Launch
+ ↓ Action: TEST_ACTIONS
 TEST_ACTING
  ↓ TARGET_WORKSPACE
 [Click / TypeInput / Key / Wait / Observe] × N
  ↓
 TEST_RESTORING
  ↓ LLM_WORKSPACE vérifié
-SENDING (#TestSessionResult Operation: ACTIONS)
+SENDING (#RelayResult Kind: TEST_SESSION / Operation: ACTIONS)
 ```
 
-`#Observe` ne redonne pas la main au LLM au milieu d’une séquence. Pour raisonner sur une image : terminer la séquence par `#Observe`, attendre le retour, puis envoyer une nouvelle directive.
+`#Observe` dans le payload TEST_ACTIONS ne redonne pas la main au LLM au milieu d’une séquence. Pour raisonner sur une image : terminer la séquence par `#Observe`, attendre le retour, puis envoyer une nouvelle directive.
 
 ### 6.3 Fermer
 
 ```text
 PROCESSING_REPLY
- ↓ #CloseTestSession
+ ↓ Action: CLOSE_TEST_SESSION
 TEST_CLOSING
  ├─ fermeture fenêtre
  ├─ terminaison arbre si nécessaire
  ├─ stdout/stderr complets
  └─ restauration LLM_WORKSPACE
  ↓
-SENDING (#TestSessionResult Operation: CLOSED)
+SENDING (#RelayResult Kind: TEST_SESSION / Operation: CLOSED)
 ```
 
 ## 7. Checkpoints stdout
@@ -202,9 +202,9 @@ Le logiciel surveille stdout pendant toute la TestSession :
 
 Le premier peut servir à `Ready: checkpoint:main-window-ready`. Le second programme une capture au prochain point d’interaction/readiness où la Target App peut être observée en sécurité.
 
-## 8. `#Multiple` temporaire rétrocompatible
+## 8. `Action: TEMP_TEST` et compatibilité historique
 
-`#Multiple` **avec `Launch:`** conserve le comportement V2.11 :
+`Action: TEMP_TEST` est le format canonique du comportement temporaire launch→actions→close. L’ancien format V1 correspondant reste accepté par compatibilité :
 
 ```text
 PROCESSING_*
@@ -214,7 +214,7 @@ PROCESSING_*
  → SENDING
 ```
 
-Il lance, agit, observe, ferme puis restitue. Un `#Multiple` **sans `Launch:`** est désormais un alias de `#TestActions` et exige une TestSession déjà ouverte.
+Il lance, agit, observe, ferme puis restitue. Les anciens alias d’actions restent compris par le parser, mais le prompt V2 n’en émet plus.
 
 ## 9. Priorité utilisateur et fail-safe
 
@@ -251,3 +251,19 @@ La readiness d'une TestSession ne dépend plus uniquement d'une interface immobi
 - `Ready: window` ne prouve que l'existence du HWND et reste un mode volontairement faible.
 
 Un `#Observe` quasi noir est retenté de manière bornée. Si aucune frame exploitable n'est obtenue, l'observation reste jointe pour diagnostic mais est annotée `OBSERVATION_WARNINGS`. L'agent ne doit alors ni inventer le contenu attendu ni compenser par des délais arbitraires.
+
+
+## 10. Contrat de résultat V2
+
+Le runtime interne reste basé sur `AutoState` et `TestSessionState`, mais les résultats envoyés au LLM rendent désormais cet état explicite :
+
+```text
+#RelayResult
+Protocol: 2
+Kind: TEST_SESSION
+...
+SessionState: ACTIVE_BACKGROUND
+RecommendedNext: TEST_ACTIONS,CLOSE_TEST_SESSION
+```
+
+Cette information est descriptive de l’état réel après traitement. Elle évite que l’agent déduise la prochaine transition depuis des notes en prose. `LegacyMarker` n’a aucun rôle dans la machine d’état ; il sert seulement à la compatibilité avec les conversations V1.
