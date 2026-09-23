@@ -37,9 +37,6 @@ def test_prompt_teaches_one_canonical_top_level_protocol():
     assert "Action: TEMP_TEST" in prompt
     assert "Action: SHOW" in prompt
     assert "Action: END" in prompt
-
-    # Historical aliases stay parser-only and are no longer choices presented
-    # to the agent.
     assert "#Multiple" not in prompt
     assert "#OpenTestSession" not in prompt
     assert "#TestActions" not in prompt
@@ -62,11 +59,22 @@ def test_prompt_explains_persistent_testing_without_guessing_timings():
     assert "saisie Unicode" in prompt
     assert "`é`, `à`, `ç`" in prompt
     assert "layout clavier du thread de la fenêtre Target" in prompt
-    assert "tant que `SessionState` n'est pas `CLOSED`" in prompt
-    assert "n'envoie jamais `EXECUTION`, `TEMP_TEST`, `SHOW`" in prompt
 
 
-def test_prompt_explains_result_state_and_recommended_next_action():
+def test_prompt_makes_testsession_lifecycle_relay_managed():
+    prompt = _prompt()
+    assert "Cycle de vie TestSession en Agent Auto" in prompt
+    assert "le Relay gère le ménage" in prompt
+    assert "un nouvel `OPEN_TEST_SESSION`" in prompt
+    assert "fermée/remplacée automatiquement" in prompt
+    assert "pas pour réparer l'état interne du Relay" in prompt
+    assert "fermeture est idempotente" in prompt
+    assert "tu n'as pas à envoyer CLOSE comme tour intermédiaire" in prompt
+    assert "remet la Target au premier plan juste avant la lecture visuelle" in prompt
+    assert "n'envoie jamais `EXECUTION`, `TEMP_TEST`, `SHOW`" not in prompt
+
+
+def test_prompt_explains_result_state_without_forcing_housekeeping():
     prompt = _prompt()
     assert "#RelayResult" in prompt
     assert "LegacyMarker" in prompt
@@ -75,8 +83,8 @@ def test_prompt_explains_result_state_and_recommended_next_action():
     assert "ACTIVE_BACKGROUND" in prompt
     assert "LOST" in prompt
     assert "OBSERVATION_WARNINGS" in prompt
-    assert "reste strictement dans ces actions" in prompt
-    assert "Ne lance jamais une commande terminal en parallèle d'une TestSession" in prompt
+    assert "pas une obligation de faire du ménage" in prompt
+    assert "ne tente pas de le réparer manuellement" in prompt
     assert "l'image n'est PAS une preuve visuelle fiable" in prompt
 
 
