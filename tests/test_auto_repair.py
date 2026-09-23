@@ -70,6 +70,17 @@ def test_policy_rejects_recovery_while_local_runtime_is_busy():
     assert decision.code == "LOCAL_RUNTIME_BUSY"
 
 
+def test_policy_rejects_recovery_from_uncertain_browser_send_state():
+    decision = classify_auto_stop(
+        "Erreur Agent Auto : collage interrompu",
+        state=AutoState.SENDING,
+        local_busy=False,
+        recovery_inflight=False,
+    )
+    assert decision.disposition == AutoRepairDisposition.FATAL
+    assert decision.code == "OUTPUT_CHANNEL_UNCERTAIN"
+
+
 def test_policy_rejects_recursive_recovery():
     decision = classify_auto_stop(
         "Le bouton Copier n'a rien copié",
