@@ -1,4 +1,4 @@
-# Auto-DeepSeek / Clipboard Agent Relay — V2.15
+# Auto-DeepSeek / Clipboard Agent Relay — V2.16
 
 Application Python locale qui transforme un chat LLM Web utilisé manuellement en **agent de développement semi-autonome**. Le navigateur n’est pas interrogé par API/DOM : le Relay utilise le presse-papiers, des interactions Windows contrôlées, une surveillance visuelle et des fenêtres explicitement liées.
 
@@ -44,10 +44,11 @@ python main.py
 
 1. Sélectionner le dossier du projet.
 2. Renseigner **Topic / Destination Goal**.
-3. Choisir le profil disponible (`Développement général` dans le socle P0 actuel).
-4. Cliquer **Copier le prompt initial**, le coller puis l’envoyer au LLM.
-5. Configurer Agent Auto une fois si nécessaire.
-6. Placer la fenêtre LLM juste derrière le Relay dans l’ordre de superposition, puis cliquer **Démarrer Agent Auto**.
+3. Choisir le profil disponible.
+4. Activer **Auto repair self** si l’on souhaite que les erreurs système récupérables soient rendues au LLM plutôt que d’arrêter immédiatement Agent Auto.
+5. Cliquer **Copier le prompt initial**, le coller puis l’envoyer au LLM.
+6. Configurer Agent Auto une fois si nécessaire.
+7. Placer la fenêtre LLM juste derrière le Relay dans l’ordre de superposition, puis cliquer **Démarrer Agent Auto**.
 
 Agent Auto commence par observer/copier **la réponse déjà affichée**. Il n’envoie pas le prompt initial une seconde fois.
 
@@ -73,8 +74,10 @@ Les réglages sont sauvegardés dans :
 ~/.clipboard_agent_relay/settings.json
 ```
 
-Le panneau est redimensionnable et scrollable. Il contient notamment :
+Le panneau contient notamment :
 
+- profil actif ;
+- option **Auto repair self** ;
 - point Prompt ;
 - point Envoyer ;
 - rectangle visuel « Réponse agent » ;
@@ -82,9 +85,45 @@ Le panneau est redimensionnable et scrollable. Il contient notamment :
 - seuil de matching ;
 - délais UI ;
 - stabilité/timeout de réponse ;
-- timings Target App/TestSession : détection fenêtre, délai entre actions, fermeture, restauration, stabilité readiness, poll readiness, settle activation.
+- timings Target App/TestSession.
 
-Les captures de setup sont persistées immédiatement.
+`Auto repair self` est désactivé par défaut afin de conserver le comportement historique après mise à jour.
+
+## Auto repair self
+
+Quand cette option est activée, un incident local **récupérable** qui aurait auparavant arrêté Agent Auto est renvoyé au LLM comme erreur système structurée :
+
+```text
+#RelayResult
+Protocol: 2
+Kind: SYSTEM_ERROR
+ID: system-...
+Status: ERROR
+Severity: RECOVERABLE
+Source: RELAY
+AutoRepairSelf: ACTIVE
+AutoState: WAITING_VISUAL
+Code: VISUAL_TIMEOUT
+RecoveryAttempt: 1/3
+Description: ...
+Instruction: ...
+```
+
+Le LLM reçoit donc explicitement la cause et peut répondre avec une directive `#Relay` normale pour réessayer, diagnostiquer ou utiliser une autre stratégie. Le Relay ne masque pas l’erreur et la journalise aussi localement.
+
+Exemples typiquement récupérables : timeout visuel, copie presse-papiers inchangée/vide, réponse de protocole invalide, échec transitoire de lancement lorsque plus aucun worker local n’est actif.
+
+Restent **fail-safe** et ne sont jamais auto-réparés :
+
+- mouvement physique de souris / `PAUSED` ;
+- commande `BLOCKED` ou demande sensible ;
+- violation de machine d’état ;
+- opération locale encore concurrente ;
+- workspace LLM impossible à restaurer ;
+- couche Win32 indispensable au canal d’envoi indisponible ;
+- incident pendant l’envoi du `SYSTEM_ERROR` lui-même.
+
+Anti-boucle : maximum 3 récupérations système dans une fenêtre glissante de 120 secondes. Au-delà, Agent Auto s’arrête.
 
 ## Détection du bouton Copier
 
@@ -115,7 +154,7 @@ ID: <id-unique>
 
 Les métadonnées viennent avant une ligne vide ; la commande ou les actions viennent après. Le logiciel traduit cette enveloppe vers ses modèles internes typés.
 
-En V2.15, une réponse de contrôle doit contenir **uniquement** cette directive (brute ou dans un unique bloc `text`). Toute prose avant/après un bloc `#Relay` est rejetée. Cette contrainte rend le cycle Agent Auto déterministe et empêche l'agent de mélanger explications et commande machine dans le même tour.
+Une réponse de contrôle doit contenir **uniquement** cette directive (brute ou dans un unique bloc `text`). Toute prose avant/après un bloc `#Relay` est rejetée. Cette contrainte rend le cycle Agent Auto déterministe et empêche l'agent de mélanger explications et commande machine dans le même tour.
 
 ### Choix de l’action
 
@@ -159,14 +198,14 @@ Ready: auto
 #Observe startup
 ```
 
-En Agent Auto, `OPEN_TEST_SESSION` est une intention déclarative : **si une TestSession précédente existe encore, le Relay la ferme puis ouvre la nouvelle sans tour LLM intermédiaire**. Le LLM n’a donc plus à envoyer `CLOSE_TEST_SESSION` uniquement comme prérequis administratif.
+En Agent Auto, `OPEN_TEST_SESSION` est une intention déclarative : **si une TestSession précédente existe encore, le Relay la ferme puis ouvre la nouvelle sans tour LLM intermédiaire**.
 
 Readiness :
 - `auto` : contenu rendu puis UI stable ou rendu dynamique actif ;
 - `content` : plusieurs frames non noires sans exigence de stabilité ;
-- `checkpoint:<nom>` : synchronisation logique puis surface rendue ; recommandé lorsque le code peut être instrumenté ;
+- `checkpoint:<nom>` : synchronisation logique puis surface rendue ;
 - `window` : existence de la fenêtre uniquement ;
-- `delay:<ms>` : mécanisme explicite exceptionnel, pas une méthode de détection de readiness.
+- `delay:<ms>` : mécanisme explicite exceptionnel.
 
 Instrumentation :
 
@@ -191,13 +230,11 @@ ID: ui-actions-1
 
 Actions de payload : `#Click`, `#TypeInput`, `#Key`, `#Wait`, `#Observe`.
 
-`#TypeInput` injecte du texte Unicode (accents, symboles, emoji). Un `#Key` constitué d'un caractère imprimable simple est traduit selon le layout clavier du **thread de la fenêtre Target** via `VkKeyScanExW` : par exemple `#Key 1` produit le caractère/touche logique `1` même si la Target utilise un layout AZERTY, et `#Key é` est supporté. Les lettres comme `#Key R` restent des touches brutes adaptées aux raccourcis/jeux.
+`#TypeInput` injecte du texte Unicode. Un `#Key` imprimable simple est traduit selon le layout clavier du thread de la fenêtre Target via `VkKeyScanExW` avec les fallbacks existants.
 
 `#Wait` est réservé aux délais qui font partie du comportement testé. Il ne doit pas servir à deviner le temps de démarrage ou de rendu.
 
 `#Observe` retente une capture transitoirement quasi noire. Une capture qui reste inexploitable est signalée par `OBSERVATION_WARNINGS`.
-
-**V2.15 prépare la Target au point exact de lecture visuelle.** Avant chaque capture différée et chaque poll de readiness, le Relay se retire du TOPMOST, réactive/remonte la Target sans la déplacer ni la redimensionner, puis seulement lit les pixels. Cela corrige le cas où la fenêtre du programme existe mais où Clipboard Agent masque visuellement sa zone cliente.
 
 ### Fermer la TestSession
 
@@ -245,14 +282,11 @@ Tous les résultats canoniques commencent par :
 #RelayResult
 Protocol: 2
 Kind: ...
-LegacyMarker: ...
 ID: ...
 Status: ...
 ```
 
-`LegacyMarker` sert uniquement à maintenir la compatibilité avec les prompts V1 déjà en cours.
-
-Les résultats de TestSession ajoutent `SessionState` et `RecommendedNext`. En V2.15, ils décrivent l’état **après réconciliation locale** : un état `LOST` ordinaire n’oblige plus le LLM à envoyer un CLOSE de ménage.
+Les résultats de TestSession ajoutent `SessionState` et `RecommendedNext`. Les `SYSTEM_ERROR` ajoutent `Severity`, `Source`, `AutoState`, `Code`, `RecoveryAttempt`, `Description` et une instruction de reprise.
 
 ## Workspaces Target App
 
@@ -265,12 +299,10 @@ LLM_WORKSPACE
  → TARGET_WORKSPACE
  → actions / captures
  → restauration + vérification LLM_WORKSPACE
- → envoi #RelayResult (Kind: TEST_SESSION)
+ → envoi #RelayResult
 ```
 
-La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Lors d'un démarrage où la Target s'est déjà mise elle-même foreground, le Relay est d'abord démoté de topmost puis la Target est explicitement remontée dans le Z-order avant readiness/`#Observe startup`. Cela évite que le Relay masque la première capture. Cela évite aussi de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
-
-Les contrôles de workspace sont **non destructifs sur la géométrie** : ils ne déplacent ni ne redimensionnent une fenêtre pour réparer le focus. Côté LLM, un HWND déjà correct reste un no-op. Côté Target, après la démotion topmost du Relay, la Target est explicitement remontée dans le Z-order même si elle était déjà foreground. En V2.15, cette garantie est réappliquée juste avant chaque lecture visuelle importante, y compris les screenshot markers différés. `SW_RESTORE` n’est utilisé que si une fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
+La Target App n’est pas minimisée par principe. Les contrôles de workspace sont non destructifs sur la géométrie : ils jouent sur focus/Z-order et ne déplacent pas les fenêtres pour réparer un clic.
 
 ## Intervention utilisateur
 
@@ -282,7 +314,7 @@ Tout mouvement physique de souris pendant Agent Auto est prioritaire :
 - aucun retour tardif vers le navigateur ;
 - la main reste à l’utilisateur.
 
-Il n’existe pas de reprise implicite depuis `PAUSED`.
+Il n’existe pas de reprise implicite depuis `PAUSED`, y compris avec `Auto repair self`.
 
 ## Nouveau projet
 
@@ -300,7 +332,7 @@ ou :
 python -m pytest
 ```
 
-La machine d’état complète est dans [`STATE_MACHINE.md`](STATE_MACHINE.md).
+La machine d’état complète est dans [`STATE_MACHINE.md`](STATE_MACHINE.md). Le contrat détaillé de récupération est dans [`MISSION_AUTO_REPAIR_SELF.md`](MISSION_AUTO_REPAIR_SELF.md).
 
 ## Build Windows
 
@@ -321,4 +353,5 @@ build_windows_exe.bat
 - les interactions bureau/TestSession sont Windows-only ;
 - la validation CI ne remplace pas un test sur un bureau Windows interactif pour `SendInput`, hooks souris, Z-order et capture GDI ;
 - ce n’est pas une sandbox OS : les commandes terminal restent puissantes ;
-- les opérations sensibles sont donc soumises à confirmation/blocage.
+- les opérations sensibles sont donc soumises à confirmation/blocage ;
+- Auto repair self ne peut pas réparer automatiquement une panne qui empêche précisément le Relay de communiquer avec le LLM.
