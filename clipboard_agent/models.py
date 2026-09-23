@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -28,6 +28,7 @@ class DirectiveKind(str, Enum):
     OPEN_TEST_SESSION = "OPEN_TEST_SESSION"
     CLOSE_TEST_SESSION = "CLOSE_TEST_SESSION"
     TEST_ACTIONS = "TEST_ACTIONS"
+    TOOL = "TOOL"
     END = "END"
 
 
@@ -69,6 +70,11 @@ class AgentDirective:
     summary: str = ""
     request_id: str = ""
     ready: str = "auto"
+    tool_profile: str = ""
+    tool_provider: str = ""
+    tool_id: str = ""
+    tool_arguments: dict[str, object] = field(default_factory=dict)
+    tool_timeout: int | None = None
 
 
 @dataclass(slots=True)
