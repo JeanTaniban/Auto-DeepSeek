@@ -37,14 +37,17 @@ class UnityCliRunner:
         return shutil.which(self.executable) is not None
 
     def run(self, args: Sequence[str], *, timeout: int = 120) -> UnityCliResult:
+        # Keep global options before the command. This is the canonical form
+        # documented by current Unity CLI releases and avoids ambiguity with
+        # passthrough subcommands that can own their own --format flag.
         command = [
             self.executable,
-            *args,
             "--format",
             "json",
             "--non-interactive",
             "--no-banner",
             "--no-color",
+            *args,
         ]
         try:
             completed = self._run_process(
