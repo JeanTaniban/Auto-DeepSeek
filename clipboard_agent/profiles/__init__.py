@@ -9,9 +9,20 @@ from .tools import ToolDescriptor, ToolExecutionError, ToolNature, ToolRequest, 
 from .unity import UnityProfile
 
 
-def build_default_profile_registry() -> ProfileRegistry:
-    """Return the profiles shipped by this build."""
-    return ProfileRegistry((GenericProfile(), UnityProfile()))
+def build_default_profile_registry(*, desktop=None) -> ProfileRegistry:
+    """Return shipped profiles, optionally wiring local UI capabilities.
+
+    The generic core passes only infrastructure abstractions (for example the
+    Win32 desktop object). Unity-specific provider selection remains contained
+    in the Unity profile package.
+    """
+    unity = UnityProfile()
+    if desktop is not None:
+        from .unity.visual import UnityVisualRouter
+        from .unity.windows_visual import UnityEditorWindowVisualProvider
+
+        unity.visual_router = UnityVisualRouter((UnityEditorWindowVisualProvider(desktop),))
+    return ProfileRegistry((GenericProfile(), unity))
 
 
 __all__ = [
