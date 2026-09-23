@@ -74,10 +74,16 @@ _ALLOWED: dict[AutoState, frozenset[AutoState]] = {
 }
 
 # Auto repair self is a control-plane escape hatch, not a normal work state.
-# Every active state may report a recoverable system fault, but OFF/PAUSED do
-# not resume implicitly and recovery itself cannot recursively re-enter itself.
+# Active states may report a recoverable system fault except when the browser
+# output itself is mid-send: SENDING can already contain a partial paste, so a
+# second message would be unsafe. OFF/PAUSED also never resume implicitly.
 for _source in tuple(_ALLOWED):
-    if _source not in {AutoState.OFF, AutoState.PAUSED, AutoState.RECOVERING_SYSTEM_ERROR}:
+    if _source not in {
+        AutoState.OFF,
+        AutoState.PAUSED,
+        AutoState.SENDING,
+        AutoState.RECOVERING_SYSTEM_ERROR,
+    }:
         _ALLOWED[_source] = frozenset((*_ALLOWED[_source], AutoState.RECOVERING_SYSTEM_ERROR))
 
 
