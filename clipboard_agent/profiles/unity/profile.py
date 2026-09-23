@@ -8,8 +8,9 @@ from ..base import AgentProfile
 from ..models import DetectionResult, HealthCheck, HealthReport, HealthStatus, ProfileMetadata, ProfileState
 from ..tools import ToolDescriptor, ToolExecutionError, ToolNature, ToolRequest, ToolResult
 from .cli import UnityCliRunner
-from .compiler import CompileOutcome, UnityCompileCoordinator
+from .compiler import UnityCompileCoordinator
 from .discovery import read_unity_project
+from .prompt import build_unity_prompt_suffix
 from .state import CompletionBarrier, UnityProfileState
 from .visual import UnityVisualRouter, VisualCaptureError, VisualIntent
 
@@ -217,20 +218,4 @@ class UnityProfile(AgentProfile):
             shell=shell,
             os_name=os_name,
         )
-        return core + """
-
-## Profil actif : Unity
-
-Tu développes un projet Unity via un profil métier. Raisonne en intentions, pas en plomberie Unity.
-
-Règles Unity :
-- préfère les outils Unity du profil aux clics dans l'Editor ;
-- après une modification C#, demande une recompilation Unity : le Relay attend le verdict avant de te répondre ;
-- pour voir le rendu, demande GAME ; pour la scène de travail, SCENE ; pour l'interface Unity, EDITOR ; pour le Player construit, RUNTIME ;
-- ne choisis jamais toi-même MCP/Win32/backend de capture, Z-order ou retries ;
-- une observation indique sa source et son niveau de confiance ;
-- n'utilise pas de délai arbitraire pour attendre compilation/import : le profil gère ces barrières ;
-- TargetSession reste la voie privilégiée pour les vrais tests gameplay du Player construit.
-
-Le support Unity est introduit progressivement. N'invente jamais un outil non annoncé par le Relay.
-"""
+        return core + build_unity_prompt_suffix()
