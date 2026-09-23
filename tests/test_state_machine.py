@@ -16,6 +16,12 @@ def test_nominal_initial_sync_and_execution_cycle():
     assert sm.transition(AutoState.PROCESSING_REPLY) == AutoState.PROCESSING_REPLY
 
 
+def test_profile_tool_has_distinct_auto_state_and_returns_to_sending():
+    sm = AutoStateMachine(AutoState.PROCESSING_REPLY)
+    assert sm.transition(AutoState.PROFILE_TOOL_RUNNING) == AutoState.PROFILE_TOOL_RUNNING
+    assert sm.transition(AutoState.SENDING) == AutoState.SENDING
+
+
 def test_initial_duplicate_can_recover_last_result_then_resume_normal_cycle():
     sm = AutoStateMachine()
     sm.transition(AutoState.STARTING)
@@ -45,6 +51,7 @@ def test_user_intervention_can_pause_from_every_active_state():
         AutoState.WAITING_CLIPBOARD,
         AutoState.PROCESSING_REPLY,
         AutoState.EXECUTING,
+        AutoState.PROFILE_TOOL_RUNNING,
         AutoState.SENDING,
         AutoState.WAITING_VISUAL,
         AutoState.TARGET_STARTING,
