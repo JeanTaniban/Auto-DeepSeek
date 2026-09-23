@@ -20,6 +20,7 @@ class AutoState(str, Enum):
     WAITING_CLIPBOARD = "WAITING_CLIPBOARD"
     PROCESSING_REPLY = "PROCESSING_REPLY"
     EXECUTING = "EXECUTING"
+    PROFILE_TOOL_RUNNING = "PROFILE_TOOL_RUNNING"
     SENDING = "SENDING"
     WAITING_VISUAL = "WAITING_VISUAL"
     TARGET_STARTING = "TARGET_STARTING"
@@ -36,16 +37,28 @@ class AutoTransitionError(RuntimeError):
     pass
 
 
+_PROCESSING_TARGETS = frozenset({
+    AutoState.EXECUTING,
+    AutoState.PROFILE_TOOL_RUNNING,
+    AutoState.TARGET_STARTING,
+    AutoState.TEST_OPENING,
+    AutoState.TEST_ACTING,
+    AutoState.TEST_CLOSING,
+    AutoState.PAUSED,
+    AutoState.OFF,
+})
+
 _ALLOWED: dict[AutoState, frozenset[AutoState]] = {
     AutoState.OFF: frozenset({AutoState.STARTING}),
     AutoState.STARTING: frozenset({AutoState.SYNCING_EXISTING_REPLY, AutoState.PAUSED, AutoState.OFF}),
     AutoState.SYNCING_EXISTING_REPLY: frozenset({AutoState.WAITING_INITIAL_CLIPBOARD, AutoState.PAUSED, AutoState.OFF}),
     AutoState.WAITING_INITIAL_CLIPBOARD: frozenset({AutoState.PROCESSING_INITIAL_REPLY, AutoState.PAUSED, AutoState.OFF}),
-    AutoState.PROCESSING_INITIAL_REPLY: frozenset({AutoState.EXECUTING, AutoState.TARGET_STARTING, AutoState.TEST_OPENING, AutoState.TEST_ACTING, AutoState.TEST_CLOSING, AutoState.RECOVERING_LAST_RESULT, AutoState.PAUSED, AutoState.OFF}),
+    AutoState.PROCESSING_INITIAL_REPLY: frozenset((*_PROCESSING_TARGETS, AutoState.RECOVERING_LAST_RESULT)),
     AutoState.RECOVERING_LAST_RESULT: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
     AutoState.WAITING_CLIPBOARD: frozenset({AutoState.PROCESSING_REPLY, AutoState.PAUSED, AutoState.OFF}),
-    AutoState.PROCESSING_REPLY: frozenset({AutoState.EXECUTING, AutoState.TARGET_STARTING, AutoState.TEST_OPENING, AutoState.TEST_ACTING, AutoState.TEST_CLOSING, AutoState.PAUSED, AutoState.OFF}),
+    AutoState.PROCESSING_REPLY: _PROCESSING_TARGETS,
     AutoState.EXECUTING: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
+    AutoState.PROFILE_TOOL_RUNNING: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
     AutoState.SENDING: frozenset({AutoState.WAITING_VISUAL, AutoState.PAUSED, AutoState.OFF}),
     AutoState.WAITING_VISUAL: frozenset({AutoState.WAITING_CLIPBOARD, AutoState.PAUSED, AutoState.OFF}),
     AutoState.TARGET_STARTING: frozenset({AutoState.TARGET_RUNNING, AutoState.TARGET_RESTORING, AutoState.PAUSED, AutoState.OFF}),
