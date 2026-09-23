@@ -8,7 +8,7 @@ from ..base import AgentProfile
 from ..models import DetectionResult, HealthCheck, HealthReport, HealthStatus, ProfileMetadata, ProfileState
 from ..tools import ToolDescriptor, ToolExecutionError, ToolNature, ToolRequest, ToolResult
 from .cli import UnityCliRunner
-from .compiler import UnityCompileCoordinator
+from .compiler import CompileOutcome, UnityCompileCoordinator
 from .discovery import read_unity_project
 from .prompt import build_unity_prompt_suffix
 from .state import CompletionBarrier, UnityProfileState
@@ -142,7 +142,12 @@ class UnityProfile(AgentProfile):
             self._state = UnityProfileState.COMPILING
             result = self.compiler.compile(project_root, timeout=request.timeout or 240)
             self._state = result.state
-            status = ExecutionStatus.SUCCESS if result.success else ExecutionStatus.ERROR
+            if result.outcome == CompileOutcome.SUCCESS:
+                status = ExecutionStatus.SUCCESS
+            elif result.outcome == CompileOutcome.TIMEOUT:
+                status = ExecutionStatus.TIMEOUT
+            else:
+                status = ExecutionStatus.ERROR
             return ToolResult(
                 request_id=request.request_id,
                 profile_id=self.metadata.profile_id,
