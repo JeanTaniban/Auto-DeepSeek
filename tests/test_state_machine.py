@@ -41,17 +41,22 @@ def test_normal_cycle_cannot_enter_initial_recovery_branch():
         sm.transition(AutoState.RECOVERING_LAST_RESULT)
 
 
-def test_system_error_recovery_is_available_from_every_active_non_paused_state():
+def test_system_error_recovery_is_available_from_safe_active_states():
     for state in AutoState:
-        if state in {AutoState.OFF, AutoState.PAUSED, AutoState.RECOVERING_SYSTEM_ERROR}:
+        if state in {
+            AutoState.OFF,
+            AutoState.PAUSED,
+            AutoState.SENDING,
+            AutoState.RECOVERING_SYSTEM_ERROR,
+        }:
             continue
         sm = AutoStateMachine(state)
         assert sm.transition(AutoState.RECOVERING_SYSTEM_ERROR) == AutoState.RECOVERING_SYSTEM_ERROR
         assert sm.transition(AutoState.SENDING) == AutoState.SENDING
 
 
-def test_system_error_recovery_cannot_resume_from_off_or_paused():
-    for state in (AutoState.OFF, AutoState.PAUSED):
+def test_system_error_recovery_cannot_start_from_off_paused_or_mid_send():
+    for state in (AutoState.OFF, AutoState.PAUSED, AutoState.SENDING):
         sm = AutoStateMachine(state)
         with pytest.raises(AutoTransitionError):
             sm.transition(AutoState.RECOVERING_SYSTEM_ERROR)
