@@ -105,6 +105,12 @@ def classify_auto_stop(
             "LOCAL_RUNTIME_BUSY",
             "Une opération locale est encore active ; rendre la main au LLM créerait une concurrence non déterministe.",
         )
+    if state == AutoState.SENDING:
+        return AutoRepairDecision(
+            AutoRepairDisposition.FATAL,
+            "OUTPUT_CHANNEL_UNCERTAIN",
+            "Le prompt du LLM peut déjà contenir un collage partiel ; un second envoi ne peut pas être composé sans risque.",
+        )
     if state in {AutoState.OFF, AutoState.PAUSED, AutoState.RECOVERING_SYSTEM_ERROR}:
         return AutoRepairDecision(
             AutoRepairDisposition.FATAL,
