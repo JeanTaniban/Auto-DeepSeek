@@ -1,6 +1,6 @@
 # Cahier des charges — Auto-DeepSeek / Clipboard Agent Relay
 
-**Version : 2.14**
+**Version : 2.15**
 **Cible principale : Windows 10/11, Python 3.11+**
 
 ## 1. Objectif
@@ -12,6 +12,7 @@ Le navigateur n’est pas piloté par DOM/API privée. Les interfaces locales re
 ### 1.1 Documents de cadrage spécialisés
 
 - `CDC_PROFILES_UNITY.md` — architecture générique des profils et spécification du premier profil métier Unity.
+- `MISSION_AUTO_TESTSESSION.md` — mission V2.15 de cycle de vie TestSession autonome et capture cible fiable.
 
 ## 2. Destination Goal
 
@@ -37,6 +38,8 @@ Sous Windows, le Relay :
 8. colle et envoie le résultat ;
 9. répète.
 
+Le mode Auto prend aussi en charge le ménage de cycle de vie des TestSessions. Le LLM exprime l’intention utile ; une session persistante précédente ne doit pas imposer un tour de protocole artificiel uniquement pour être fermée.
+
 ## 4. Fenêtres déterministes
 
 Identités :
@@ -60,6 +63,8 @@ Le point Prompt et le point Envoyer doivent appartenir à `LLM_WINDOW`. Si ce n�
 - après cette démotion, `TARGET_WINDOW` est explicitement remontée dans le Z-order même si elle possédait déjà le foreground ;
 - aucune readiness, capture ou interaction Target si le foreground vérifié n’est pas la cible.
 
+La préparation Target est rejouée au point de lecture visuelle, y compris pour chaque poll de readiness et pour les screenshot markers différés. Une capture ne doit donc jamais supposer qu’un focus obtenu plus tôt est encore suffisant.
+
 Après interaction, le LLM workspace est restauré et vérifié avant tout clic/paste navigateur.
 
 ## 5. Protocole LLM
@@ -81,7 +86,7 @@ Une seule directive de contrôle est autorisée par réponse. Le champ `Action` 
 - `EXECUTION` : commande shell atomique ;
 - `OPEN_TEST_SESSION` : ouverture d’une application persistante ;
 - `TEST_ACTIONS` : actions sur la TestSession active ;
-- `CLOSE_TEST_SESSION` : fermeture de la TestSession ;
+- `CLOSE_TEST_SESSION` : fermeture volontaire de la TestSession ;
 - `TEMP_TEST` : test UI temporaire launch→actions→close ;
 - `SHOW` : démonstration utilisateur et arrêt Auto ;
 - `END` : fin de mission.
@@ -100,7 +105,7 @@ Les anciens marqueurs restent acceptés afin de ne pas casser les conversations 
 
 Les alias historiques et raccourcis d’actions restent donc une **couche de compatibilité parser**, pas une surface utilisateur normale.
 
-### 5.3 Résultats V2
+### 5.3 Résultats V2 et cycle de vie TestSession
 
 Les résultats canoniques commencent par un préambule commun :
 
@@ -116,14 +121,23 @@ Status: ...
 `LegacyMarker` maintient la reconnaissance par les anciens prompts.
 
 Pour les TestSessions, le résultat expose aussi :
-- `SessionState` : état réel de la session ;
-- `RecommendedNext` : actions recommandées depuis cet état ;
+- `SessionState` : état réel de la session après réconciliation locale ;
+- `RecommendedNext` : actions techniquement pertinentes depuis cet état ;
 - `SessionActive` ;
 - `LLMWorkspaceRestored`.
 
-Le but est que le LLM n’ait pas à reconstruire implicitement la machine d’état à partir de texte libre.
+Le but est que le LLM n’ait pas à reconstruire implicitement la machine d’état à partir de texte libre ni à gérer le ménage interne du Relay.
 
-Tant que `TestSessionState` n'est pas `CLOSED`, Agent Auto doit refuser les actions incompatibles avec la session persistante (`EXECUTION`, `TEMP_TEST`, `SHOW`, nouvel `OPEN_TEST_SESSION`). Une session active accepte `TEST_ACTIONS`/`CLOSE_TEST_SESSION`; `LOST` exige `CLOSE_TEST_SESSION` avant de poursuivre.
+En **Agent Auto**, le cycle de vie est intent-based :
+
+- un nouvel `OPEN_TEST_SESSION` ferme/remplace automatiquement une TestSession précédente ;
+- `EXECUTION`, `TEMP_TEST` ou `SHOW` nettoient d’abord une TestSession restante au lieu d’arrêter Auto pour ce seul conflit ;
+- `CLOSE_TEST_SESSION` sur une session déjà fermée est idempotent et renvoie un succès ;
+- `TEST_ACTIONS` sans session active produit un résultat structuré récupérable au lieu d’arrêter Auto ;
+- un résultat `LOST` sans intervention utilisateur est nettoyé localement et normalisé vers `CLOSED` avant d’être renvoyé au LLM ;
+- une fermeture technique de réconciliation n’est pas exposée comme tour LLM intermédiaire.
+
+Une opération concurrente réellement encore en cours, une restauration LLM impossible ou une intervention physique de l’utilisateur restent des conditions fail-safe et peuvent interrompre Auto.
 
 ## 6. Readiness TestSession
 
@@ -137,6 +151,8 @@ Modes :
 
 Un délai de settle après activation est configurable avant évaluation.
 
+Chaque lecture visible de readiness doit immédiatement rappeler `ensure_target_workspace()` afin que le Relay soit démoté du TOPMOST et que la Target soit remontée avant l’échantillonnage. Une zone non noire appartenant au Relay ne doit jamais valider la readiness de la Target.
+
 Marqueurs stdout :
 
 ```text
@@ -148,7 +164,9 @@ Le premier synchronise une readiness. Le second programme une observation à la 
 
 ## 7. Captures visuelles Target
 
-`#Observe` capture uniquement la zone cliente de `TARGET_WINDOW`. Une capture quasi noire déclenche un fallback Win32 puis des retries bornés ; la frame la plus informative est conservée. Si elle reste quasi noire, le résultat la marque explicitement dans `OBSERVATION_WARNINGS` afin qu'elle ne soit pas interprétée comme preuve visuelle fiable. Plusieurs captures peuvent être composées en une planche envoyée au LLM. Le redimensionnement éventuel de la planche ne change jamais le repère des futurs `#Click`, qui reste la taille cliente originale indiquée dans le résultat.
+`#Observe` capture uniquement la zone cliente de `TARGET_WINDOW`. Immédiatement avant la capture, le workspace Target est réconcilié : Relay non-topmost, Target activée/remontée, géométrie conservée. Cette préparation s’applique aussi aux captures demandées par `[[CAR_SCREENSHOT:...]]` qui peuvent arriver après restauration du workspace LLM.
+
+Une capture quasi noire déclenche un fallback Win32 puis des retries bornés ; la frame la plus informative est conservée. Si elle reste quasi noire, le résultat la marque explicitement dans `OBSERVATION_WARNINGS` afin qu'elle ne soit pas interprétée comme preuve visuelle fiable. Plusieurs captures peuvent être composées en une planche envoyée au LLM. Le redimensionnement éventuel de la planche ne change jamais le repère des futurs `#Click`, qui reste la taille cliente originale indiquée dans le résultat.
 
 ## 8. Détection réponse LLM
 
@@ -213,27 +231,29 @@ Configuration : `~/.clipboard_agent_relay/settings.json`.
 
 Persistants notamment : Goal/projet, setup Auto, template Copier, timings, seuils.
 
-`Nouveau projet` remet le contexte de travail à zéro mais ne supprime pas le setup Auto global. Une TestSession doit être fermée avant changement de projet.
+`Nouveau projet` remet le contexte de travail à zéro mais ne supprime pas le setup Auto global. Une TestSession doit être fermée avant changement de projet manuel ; en Agent Auto, la réconciliation de session est gérée par le Relay entre directives.
 
 ## 13. Architecture
 
 ```text
 clipboard_agent/
-  app.py              UI + orchestration
-  protocol.py         parser/formatter protocole
-  models.py           modèles typés
-  state_machine.py    machine Agent Auto
-  workspace.py        binding Z-order/workspaces LLM/Target
-  test_session.py     TestSession persistante
-  target_session.py   TEMP_TEST temporaire / compatibilité V1
-  win32_input.py      Win32 mouse/keyboard/window/capture
-  execution.py        commandes/processus
-  visual_watch.py     mouvement/stabilité
-  visual_match.py     détection Copier
-  security.py         classification
-  redaction.py        secrets
-  storage.py          settings
-  prompt_builder.py   instructions LLM
+  app.py                  UI + orchestration compatible
+  profiled_app.py         couche active profils + cycle TestSession Auto
+  managed_test_session.py capture/readiness persistante réconciliée
+  protocol.py             parser/formatter protocole
+  models.py               modèles typés
+  state_machine.py        machine Agent Auto
+  workspace.py            binding Z-order/workspaces LLM/Target
+  test_session.py         TestSession persistante de base
+  target_session.py       TEMP_TEST temporaire / compatibilité V1
+  win32_input.py          Win32 mouse/keyboard/window/capture
+  execution.py            commandes/processus
+  visual_watch.py         mouvement/stabilité
+  visual_match.py         détection Copier
+  security.py             classification
+  redaction.py            secrets
+  storage.py              settings
+  prompt_builder.py       instructions LLM
 ```
 
 ## 14. Machine d’état
@@ -253,6 +273,10 @@ Obligatoires :
 - matching visuel ;
 - workspaces Z-order/focus ;
 - TestSession open→actions→close avec même processus ;
+- réconciliation Auto d’une session restante avant nouvel `OPEN_TEST_SESSION`/`EXECUTION` ;
+- `CLOSE_TEST_SESSION` idempotent et `TEST_ACTIONS` sans session récupérable ;
+- normalisation Auto `LOST`→`CLOSED` ;
+- préparation Target avant chaque poll de readiness/capture différée ;
 - checkpoints et screenshot markers ;
 - `TEMP_TEST` + ancien format temporaire V1 non régressés ;
 - intervention souris ;
