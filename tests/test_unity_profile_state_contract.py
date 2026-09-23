@@ -53,6 +53,15 @@ def _compile_request(request_id="compile-state"):
     )
 
 
+def _health_request(request_id="health-state"):
+    return ToolRequest(
+        request_id=request_id,
+        profile_id="unity",
+        provider="unity-profile",
+        tool_id="unity.health",
+    )
+
+
 def _manager(profile):
     return ProfileManager(
         ProfileRegistry((profile,)),
@@ -116,7 +125,7 @@ def test_compile_error_is_recoverable_editor_ready_state(tmp_path):
     assert profile.current_state() == ProfileState.READY
 
 
-def test_compile_timeout_enters_error_and_requires_recheck(tmp_path):
+def test_compile_timeout_enters_error_and_requires_explicit_health_recovery(tmp_path):
     root = _unity_project(tmp_path)
     cli = FakeCli(UnityCliResult(
         args=("unity", "recompile"),
@@ -126,12 +135,19 @@ def test_compile_timeout_enters_error_and_requires_recheck(tmp_path):
         timed_out=True,
     ))
     profile = UnityProfile(cli=cli)
+    manager = _manager(profile)
 
-    result = _manager(profile).execute_tool(_compile_request("compile-timeout-state"), root)
+    result = manager.execute_tool(_compile_request("compile-timeout-state"), root)
 
     assert result.status == ExecutionStatus.TIMEOUT
     assert profile.unity_state == UnityProfileState.ERROR
     assert profile.current_state() == ProfileState.ERROR
 
     with pytest.raises(ToolExecutionError, match="état profil ERROR"):
-        _manager(profile).execute_tool(_compile_request("compile-again"), root)
+        manager.execute_tool(_compile_request("compile-again"), root)
+
+    health = manager.execute_tool(_health_request(), root)
+    assert health.status == ExecutionStatus.SUCCESS
+    assert health.data["overall"] == "PASS"
+    assert profile.unity_state == UnityProfileState.READY
+    assert profile.current_state() == ProfileState.READY
