@@ -1,4 +1,4 @@
-# Auto-DeepSeek / Clipboard Agent Relay — V2.14
+# Auto-DeepSeek / Clipboard Agent Relay — V2.15
 
 Application Python locale qui transforme un chat LLM Web utilisé manuellement en **agent de développement semi-autonome**. Le navigateur n’est pas interrogé par API/DOM : le Relay utilise le presse-papiers, des interactions Windows contrôlées, une surveillance visuelle et des fenêtres explicitement liées.
 
@@ -11,9 +11,9 @@ Le protocole canonique V2 utilise **un seul marqueur top-level** : `#Relay`, pui
 Actions principales :
 
 - `EXECUTION` : commande shell atomique + stdout/stderr ;
-- `OPEN_TEST_SESSION` : lance l’application développée et la garde ouverte entre plusieurs tours LLM ;
+- `OPEN_TEST_SESSION` : lance l’application développée et la garde ouverte entre plusieurs tours LLM ; en Auto, une nouvelle ouverture remplace automatiquement l’ancienne ;
 - `TEST_ACTIONS` : clics/clavier/observations sur cette même application ;
-- `CLOSE_TEST_SESSION` : ferme la session et renvoie les logs finaux ;
+- `CLOSE_TEST_SESSION` : ferme volontairement la session et renvoie les logs finaux ; en Auto, CLOSE est idempotent ;
 - `TEMP_TEST` : test UI court launch→actions→close ;
 - `SHOW` : démonstration visible à l’utilisateur et arrêt Auto ;
 - `END` : fin de mission.
@@ -44,9 +44,10 @@ python main.py
 
 1. Sélectionner le dossier du projet.
 2. Renseigner **Topic / Destination Goal**.
-3. Cliquer **Copier le prompt initial**, le coller puis l’envoyer au LLM.
-4. Configurer Agent Auto une fois si nécessaire.
-5. Placer la fenêtre LLM juste derrière le Relay dans l’ordre de superposition, puis cliquer **Démarrer Agent Auto**.
+3. Choisir le profil disponible (`Développement général` dans le socle P0 actuel).
+4. Cliquer **Copier le prompt initial**, le coller puis l’envoyer au LLM.
+5. Configurer Agent Auto une fois si nécessaire.
+6. Placer la fenêtre LLM juste derrière le Relay dans l’ordre de superposition, puis cliquer **Démarrer Agent Auto**.
 
 Agent Auto commence par observer/copier **la réponse déjà affichée**. Il n’envoie pas le prompt initial une seconde fois.
 
@@ -114,16 +115,16 @@ ID: <id-unique>
 
 Les métadonnées viennent avant une ligne vide ; la commande ou les actions viennent après. Le logiciel traduit cette enveloppe vers ses modèles internes typés.
 
-En V2.14, une réponse de contrôle doit contenir **uniquement** cette directive (brute ou dans un unique bloc `text`). Toute prose avant/après un bloc `#Relay` est rejetée. Cette contrainte rend le cycle Agent Auto déterministe et empêche l'agent de mélanger explications et commande machine dans le même tour.
+En V2.15, une réponse de contrôle doit contenir **uniquement** cette directive (brute ou dans un unique bloc `text`). Toute prose avant/après un bloc `#Relay` est rejetée. Cette contrainte rend le cycle Agent Auto déterministe et empêche l'agent de mélanger explications et commande machine dans le même tour.
 
 ### Choix de l’action
 
 | Besoin | Action |
 |---|---|
 | terminal / fichiers / build / tests | `EXECUTION` |
-| ouvrir une UI persistante | `OPEN_TEST_SESSION` |
-| agir sur la UI persistante | `TEST_ACTIONS` |
-| fermer la UI persistante | `CLOSE_TEST_SESSION` |
+| ouvrir ou remplacer une UI persistante | `OPEN_TEST_SESSION` |
+| agir sur la UI persistante courante | `TEST_ACTIONS` |
+| fermer volontairement la UI persistante | `CLOSE_TEST_SESSION` |
 | test UI one-shot | `TEMP_TEST` |
 | donner le programme à l’utilisateur | `SHOW` |
 | terminer la mission | `END` |
@@ -142,7 +143,7 @@ Timeout: 120
 git status --short
 ```
 
-### Ouvrir une TestSession persistante
+### Ouvrir ou remplacer une TestSession persistante
 
 ```text
 #Relay
@@ -157,6 +158,8 @@ Ready: auto
 
 #Observe startup
 ```
+
+En Agent Auto, `OPEN_TEST_SESSION` est une intention déclarative : **si une TestSession précédente existe encore, le Relay la ferme puis ouvre la nouvelle sans tour LLM intermédiaire**. Le LLM n’a donc plus à envoyer `CLOSE_TEST_SESSION` uniquement comme prérequis administratif.
 
 Readiness :
 - `auto` : contenu rendu puis UI stable ou rendu dynamique actif ;
@@ -194,6 +197,8 @@ Actions de payload : `#Click`, `#TypeInput`, `#Key`, `#Wait`, `#Observe`.
 
 `#Observe` retente une capture transitoirement quasi noire. Une capture qui reste inexploitable est signalée par `OBSERVATION_WARNINGS`.
 
+**V2.15 prépare la Target au point exact de lecture visuelle.** Avant chaque capture différée et chaque poll de readiness, le Relay se retire du TOPMOST, réactive/remonte la Target sans la déplacer ni la redimensionner, puis seulement lit les pixels. Cela corrige le cas où la fenêtre du programme existe mais où Clipboard Agent masque visuellement sa zone cliente.
+
 ### Fermer la TestSession
 
 ```text
@@ -202,6 +207,20 @@ Protocol: 2
 Action: CLOSE_TEST_SESSION
 ID: gui-close-1
 ```
+
+En Agent Auto, la fermeture est idempotente : demander CLOSE alors que la session est déjà `CLOSED` renvoie un succès et la boucle continue.
+
+### Réconciliation automatique
+
+Agent Auto gère le cycle de vie au lieu de demander au LLM de réparer l’état interne :
+
+- nouvel `OPEN_TEST_SESSION` + ancienne session → ancienne session fermée automatiquement, puis nouvelle ouverture ;
+- `EXECUTION`, `TEMP_TEST` ou `SHOW` + session restante → nettoyage de la session avant l’action utile ;
+- `TEST_ACTIONS` sans session exploitable → résultat structuré récupérable, Auto reste actif ;
+- résultat `LOST` sans intervention utilisateur → nettoyage local et résultat normalisé en `CLOSED` ;
+- aucune fermeture de maintenance interne n’est envoyée comme faux tour supplémentaire au LLM.
+
+Une opération locale réellement concurrente, une restauration LLM impossible ou une intervention physique utilisateur restent fail-safe.
 
 ### Test temporaire
 
@@ -233,9 +252,7 @@ Status: ...
 
 `LegacyMarker` sert uniquement à maintenir la compatibilité avec les prompts V1 déjà en cours.
 
-Les résultats de TestSession ajoutent `SessionState` et `RecommendedNext`. L’agent n’a donc plus à déduire implicitement si la session est encore active ni quel type d’action utiliser ensuite.
-
-Tant que la TestSession n'est pas `CLOSED`, Agent Auto isole cette session : `EXECUTION`, `TEMP_TEST`, `SHOW` et un second `OPEN_TEST_SESSION` sont refusés. Une session active se pilote par `TEST_ACTIONS` puis `CLOSE_TEST_SESSION`; une session `LOST` doit être nettoyée par `CLOSE_TEST_SESSION` avant de poursuivre.
+Les résultats de TestSession ajoutent `SessionState` et `RecommendedNext`. En V2.15, ils décrivent l’état **après réconciliation locale** : un état `LOST` ordinaire n’oblige plus le LLM à envoyer un CLOSE de ménage.
 
 ## Workspaces Target App
 
@@ -253,7 +270,7 @@ LLM_WORKSPACE
 
 La Target App n’est pas minimisée par principe : elle est placée au premier plan pendant l’interaction puis repassée derrière le LLM par restauration du Z-order/focus. Lors d'un démarrage où la Target s'est déjà mise elle-même foreground, le Relay est d'abord démoté de topmost puis la Target est explicitement remontée dans le Z-order avant readiness/`#Observe startup`. Cela évite que le Relay masque la première capture. Cela évite aussi de casser les moteurs GUI qui suspendent leur rendu lorsqu’ils sont minimisés.
 
-Les contrôles de workspace sont **non destructifs sur la géométrie** : ils ne déplacent ni ne redimensionnent une fenêtre pour réparer le focus. Côté LLM, un HWND déjà correct reste un no-op. Côté Target, après la démotion topmost du Relay, la Target est explicitement remontée dans le Z-order même si elle était déjà foreground afin de garantir la visibilité de readiness/`#Observe startup`. `SW_RESTORE` n’est utilisé que si une fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
+Les contrôles de workspace sont **non destructifs sur la géométrie** : ils ne déplacent ni ne redimensionnent une fenêtre pour réparer le focus. Côté LLM, un HWND déjà correct reste un no-op. Côté Target, après la démotion topmost du Relay, la Target est explicitement remontée dans le Z-order même si elle était déjà foreground. En V2.15, cette garantie est réappliquée juste avant chaque lecture visuelle importante, y compris les screenshot markers différés. `SW_RESTORE` n’est utilisé que si une fenêtre est réellement minimisée. Avant une action navigateur, la géométrie du HWND LLM et la propriété des points Prompt/Envoyer sont vérifiées ; en cas de dérive, Auto s’arrête au lieu de déplacer la fenêtre juste avant le clic ou la détection.
 
 ## Intervention utilisateur
 
