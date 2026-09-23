@@ -24,7 +24,7 @@ Cette mission couvre quatre briques :
 - Les commandes machine-readable utilisent JSON/NDJSON lorsqu'ils sont disponibles.
 - La compilation doit être interprétée comme une opération métier, pas comme une simple commande shell opaque.
 - La vision est exprimée par intention (`GAME`, `SCENE`, `EDITOR`, `RUNTIME`) ; le LLM ne choisit pas le backend.
-- Le glue code UI/Auto reste dans `profiled_app.py`; compilation, détection et vision Unity restent dans le package Unity.
+- `profiled_app.py` conserve uniquement l'UI de profils et la réconciliation TestSession ; le pont protocole/runtime TOOL est isolé dans `profile_tool_host.py`.
 
 ## Livrables réalisés
 
@@ -36,12 +36,13 @@ Cette mission couvre quatre briques :
 - `UnityCompileCoordinator` avec `SUCCESS`, `COMPILE_ERROR`, `INFRA_ERROR`, `TIMEOUT` ;
 - extension stricte `Action: TOOL`, séparée du gros parser historique ;
 - exécution asynchrone des outils afin de ne pas bloquer Tk ;
+- `ProfileToolHostMixin` dédié au pont Relay/Tk : parsing TOOL, anti-duplication, runtime asynchrone, résultat et jointure image ;
 - résultat canonique `#RelayResult / Kind: TOOL` ;
 - modèles visuels Unity et `UnityVisualRouter` ;
 - premier provider concret `UnityEditorWindowVisualProvider` : capture de la fenêtre Editor correspondant au projet, PNG artifact, confiance `MEDIUM`, sans prétendre être une preuve native ;
 - jointure automatique du premier artifact image au retour Agent Auto ;
 - prompt Unity isolé dans `profiles/unity/prompt.py`, limité aux intentions et outils réellement exposés ;
-- tests unitaires dédiés compilation, routage, protocole TOOL et vision.
+- tests unitaires dédiés compilation, routage, protocole TOOL, séparation structurelle et vision.
 
 ## Hors périmètre restant de cette première brique
 
@@ -61,6 +62,7 @@ Ces éléments viennent après validation de ce socle.
 - Le health check distingue projet invalide, CLI absent et CLI disponible.
 - Le coordinateur de compilation transforme correctement succès, compile error, timeout/infra error en résultat typé.
 - Le Relay exécute `Action: TOOL` hors thread Tk et ne rend la main au LLM qu'après le verdict métier.
+- `profiled_app.py` n'embarque pas le parser ni le runtime TOOL ; ce pont est un composant générique séparé.
 - Le routeur visuel choisit le meilleur provider selon l'intention et expose provenance / confiance / fallback.
 - `EDITOR` dispose d'un vrai fallback Windows produisant un artifact PNG ; le provider refuse de deviner un autre projet Unity.
 - Aucun backend visuel concret n'est codé dans le contrat LLM-facing.
@@ -69,6 +71,7 @@ Ces éléments viennent après validation de ce socle.
 ## Validation à date
 
 - Les briques profile/tools, Unity compile et visual router sont couvertes par fakes en CI.
+- La séparation `ProfileToolHostMixin` / `ProfiledClipboardAgentApp` est couverte par un test structurel et un test de chargement d'artifact image.
 - Le fallback Editor Windows est couvert par un faux desktop et vérifie sélection du bon projet + écriture PNG.
 - La syntaxe Unity CLI utilise les options globales machine-readable avant la commande (`unity --format json --non-interactive ...`).
 - La validation physique Unity reste explicitement à faire : la CI GitHub n'a pas Unity installé et ne doit pas simuler cette preuve.
