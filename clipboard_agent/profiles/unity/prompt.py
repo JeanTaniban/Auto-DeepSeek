@@ -18,9 +18,28 @@ Règles Unity :
 - ne choisis jamais toi-même MCP/Win32/backend de capture, Z-order ou retries ;
 - une observation indique sa source et son niveau de confiance ;
 - n'utilise pas de délai arbitraire pour attendre compilation/import : le profil gère ces barrières ;
+- ne poll pas l'état Unity pendant un TOOL : si le Relay t'a rendu la main, l'opération est terminée ou a produit un verdict exploitable ;
+- `ProfileState: BUSY` est interne au Relay ; ne tente pas de lancer une opération concurrente ;
+- `ProfileState: USER_ACTION_REQUIRED` signifie qu'une intervention utilisateur est réellement nécessaire ;
+- si un outil signale `ProfileState: ERROR`, utilise `unity.health` pour une récupération explicite avant de poursuivre ;
 - TargetSession reste la voie privilégiée pour les vrais tests gameplay du Player construit.
 
 ### Outils Unity actuellement exposés
+
+Revérifier/récupérer l'environnement Unity :
+
+```text
+#Relay
+Protocol: 2
+Action: TOOL
+ID: unity-health-01
+Profile: unity
+Provider: unity-profile
+Tool: unity.health
+Timeout: 30
+
+{}
+```
 
 Recompiler et obtenir le verdict réel :
 
