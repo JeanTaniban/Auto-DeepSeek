@@ -18,33 +18,35 @@ Le système n'est pas une seule machine géante. Quatre machines orthogonales se
 3. **Unity Domain State** — état réel du projet/Editor/CLI ;
 4. **TargetSession / Runtime** — interaction avec une fenêtre Player ou application externe.
 
-Le LLM ne doit voir qu'un état métier simple (`READY`, `BUSY`, `ACTION_REQUIRED`, `ERROR`) et les résultats utiles. Les transitions techniques restent internes.
+Le LLM ne doit voir qu'un état métier simple (`READY`, `BUSY`, `USER_ACTION_REQUIRED`, `DEGRADED`, `ERROR`) et les résultats utiles. Les transitions techniques restent internes.
+
+Le document de référence détaillé de cette mission est `UNITY_STATE_MACHINE.md`. `STATE_MACHINE.md` reste la référence de la machine cœur/TestSession V2.15 ; les deux machines sont orthogonales et le code les relie via le Profile Tool Host.
 
 ## Audit initial — écarts constatés
 
-- `Action: TOOL` utilise encore `AutoState.EXECUTING`, le même état que les commandes shell génériques ; la machine Relay ne distingue donc pas explicitement une opération de profil.
-- `UnityProfileState` est actuellement une simple enum : aucune transition n'est validée.
-- `health_check()` assigne directement `READY`, `ERROR` ou `USER_ACTION_REQUIRED` sans passer par `CHECKING`.
-- `unity.recompile` assigne directement `COMPILING` puis l'état final, sans machine de transitions.
-- plusieurs états Unity prévus (`EDITOR_STARTING`, `IMPORTING`, `PLAY_MODE`, `TESTING`, `BUILDING`, `RUNTIME_TESTING`) ne sont pas encore raccordés à un scheduler ; ils sont documentaires seulement.
-- `ToolDescriptor.allowed_states` existe mais n'est pas appliqué par `ProfileManager.execute_tool()`.
-- un outil Unity peut donc être demandé alors que le profil est `UNINITIALIZED`, `USER_ACTION_REQUIRED` ou `ERROR` ; aujourd'hui le runtime ne l'interdit pas génériquement.
-- la compilation est déjà transactionnelle, mais le contrat ne modélise pas encore explicitement reconnect/domain reload, import ou quiescence.
-- `STATE_MACHINE.md` ne documente pas encore `Action: TOOL` ni la machine Unity ajoutée après V2.15.
+- `Action: TOOL` utilisait encore `AutoState.EXECUTING`, le même état que les commandes shell génériques ; la machine Relay ne distinguait donc pas explicitement une opération de profil.
+- `UnityProfileState` était une simple enum : aucune transition n'était validée.
+- `health_check()` assignait directement `READY`, `ERROR` ou `USER_ACTION_REQUIRED` sans passer par `CHECKING`.
+- `unity.recompile` assignait directement `COMPILING` puis l'état final, sans machine de transitions.
+- plusieurs états Unity prévus (`EDITOR_STARTING`, `IMPORTING`, `PLAY_MODE`, `TESTING`, `BUILDING`, `RUNTIME_TESTING`) n'étaient pas raccordés à un scheduler ; ils étaient documentaires seulement.
+- `ToolDescriptor.allowed_states` existait mais n'était pas appliqué par `ProfileManager.execute_tool()`.
+- un outil Unity pouvait donc être demandé alors que le profil était `UNINITIALIZED`, `USER_ACTION_REQUIRED` ou `ERROR` sans garde générique.
+- la compilation était déjà transactionnelle, mais le contrat ne modélisait pas explicitement reconnect/domain reload, import ou quiescence.
+- la documentation cœur ne couvrait pas encore la machine Unity ajoutée avec le système de profils.
 
 ## Référence Unity CLI vérifiée
 
-La conception doit tenir compte des comportements actuels du CLI expérimental :
+La conception tient compte des comportements actuels du CLI expérimental :
 
-- `unity status` distingue désormais `starting` et `ready` et produit des sorties structurées ;
-- `unity status`, `unity editors running` et `unity command` retentent une fois après recompilation avant de conclure que l'Editor est inaccessible ;
-- `unity command`/Pipeline expose notamment `recompile`, `recompile_status`, `run_tests`, `test_status` ;
-- les jobs détachés sont gérés par `unity job status/wait/cancel` ;
-- `unity test` distingue échec de tests (`8`) et absence de verdict/infrastructure (`6`) ;
-- `unity shell --protocol ndjson` existe pour les agents mais reste un transport futur ;
-- Unity Pipeline nécessite d'attendre la recompilation du projet après installation.
+- `unity status` distingue `starting` et `ready` et produit des sorties structurées ;
+- `unity status`, `unity editors running` et `unity command` retentent après recompilation avant de conclure trop vite que l'Editor est inaccessible ;
+- Pipeline expose notamment des opérations de recompilation et tests ;
+- les jobs longs disposent de `job status/wait/cancel` ;
+- `unity test` distingue échec réel des tests et absence de verdict/infrastructure ;
+- `unity shell --protocol ndjson` existe pour l'automatisation mais reste un transport futur ;
+- l'installation de Pipeline impose d'attendre la recompilation du projet avant usage.
 
-## Machine Unity cible
+## Machine Unity retenue
 
 États internes normalisés :
 
@@ -76,11 +78,12 @@ Les états transitoires sont `BUSY` côté LLM. `READY` et `EDITOR_READY` sont e
 - une seule opération métier mutable Unity à la fois ;
 - une transition non autorisée échoue fermée ;
 - une opération ne peut démarrer que depuis un état explicitement autorisé ;
-- `UNINITIALIZED` déclenche un health check paresseux avant le premier outil ;
+- `UNINITIALIZED` déclenche un health check paresseux avant le premier outil normal ;
 - `USER_ACTION_REQUIRED` n'est jamais contourné automatiquement ;
 - une compile error est un verdict métier récupérable, pas une panne d'infrastructure ;
-- après une recompilation réussie ou échouée, l'état retourne à `EDITOR_READY` si l'Editor a fourni un verdict exploitable ;
-- timeout / CLI inaccessible / protocole invalide → `ERROR` ou `DEGRADED` selon récupération possible ;
+- après une recompilation réussie ou une erreur C# exploitable, l'état retourne à `EDITOR_READY` ;
+- timeout / CLI inaccessible / verdict inutilisable → `ERROR` ;
+- la récupération depuis `ERROR` ou `USER_ACTION_REQUIRED` passe explicitement par `unity.health` / `CHECKING` ;
 - aucun polling ou `sleep` arbitraire n'est exposé au LLM ;
 - TargetSession reste orthogonale à Unity Domain State : elle sert au Player/runtime et aux fallbacks GUI ;
 - une fermeture/cleanup technique ne doit pas provoquer un tour LLM supplémentaire.
@@ -105,53 +108,55 @@ CHECK / DISCOVER
   → répétition
 ```
 
-Les futures opérations devront couvrir :
+Le modèle prévoit : ouverture/fermeture Editor, discovery, scènes/GameObjects/components/assets/packages/settings, imports, compilation/reload, Play Mode, EditMode/PlayMode tests, Build Profiles, Player runtime, interaction gameplay, captures, VCS/.meta/affected, package setup, licence/auth et récupération après crash.
 
-- ouverture/fermeture Editor ;
-- discovery de capabilities ;
-- inspection scènes/GameObjects/components/assets/packages/settings ;
-- édition scènes/prefabs/components/assets ;
-- import/refresh ;
-- compilation/reload ;
-- Play Mode enter/exit ;
-- EditMode/PlayMode tests ;
-- Build Profiles / builds ;
-- lancement Player ;
-- interaction gameplay ;
-- captures Game/Scene/Editor/Runtime ;
-- VCS/.meta/affected tests ;
-- package install/upgrade ;
-- diagnostics/licence/auth ;
-- cleanup et récupération après crash.
+## Corrections réalisées
 
-## Corrections à implémenter dans cette mission
+1. `AutoState.PROFILE_TOOL_RUNNING` sépare maintenant les outils métier des commandes shell `EXECUTING` ;
+2. `UnityStateMachine` valide une table explicite de transitions et refuse les transitions concurrentes incohérentes ;
+3. `UnityProfile` utilise la machine pour health/compilation/récupération au lieu d'assignations directes ;
+4. `ProfileManager` applique maintenant réellement `ToolDescriptor.allowed_states` après une préparation sûre du profil ;
+5. `AgentProfile.prepare_tool()` permet un health check paresseux avant le premier outil ;
+6. `unity.health` fournit un chemin de récupération explicite depuis `ERROR`, `USER_ACTION_REQUIRED`, `DEGRADED` ou `UNINITIALIZED` ;
+7. le prompt Unity explique seulement le contrat utile : pas de polling, pas de concurrence, `unity.health` pour récupérer une panne ;
+8. `UNITY_STATE_MACHINE.md` documente la machine composite et distingue clairement états déjà câblés et providers futurs ;
+9. des tests couvrent transitions Relay, transitions Unity, états interdits, lazy health, CLI absent, compile error récupérable, timeout vers ERROR et récupération par health.
 
-1. ajouter un état Relay explicite `PROFILE_TOOL_RUNNING` ;
-2. introduire `UnityStateMachine` avec table de transitions et erreur fail-safe ;
-3. faire utiliser cette machine à `UnityProfile` au lieu d'assignations directes ;
-4. appliquer `ToolDescriptor.allowed_states` dans `ProfileManager` ;
-5. ajouter une préparation paresseuse du profil avant le premier outil pour éviter un faux blocage au démarrage ;
-6. documenter la machine composite complète dans `STATE_MACHINE.md` et un document Unity dédié ;
-7. ajouter des tests de transitions, d'états interdits et de conformité du chemin `TOOL`.
+## Hors périmètre restant
 
-## Hors périmètre de cette mission
+Les états sont réservés et testés mais les providers réels suivants restent à implémenter :
 
-- implémenter tous les futurs providers Unity (tests/build/playmode/packages) ;
+- ouverture/attente Editor (`EDITOR_STARTING`) ;
+- observation native import/quiescence ;
+- `RELOADING` explicitement observé entre compile et reconnexion ;
+- Play Mode ;
+- tests Unity ;
+- build ;
+- lancement Player orchestré par UnityProfile ;
+- Pipeline commands/jobs complets ;
 - shell NDJSON persistant ;
-- Pipeline réel sur la machine utilisateur ;
 - capture native Game/Scene View ;
 - validation physique Unity locale.
 
-La machine doit néanmoins prévoir ces états et rendre leur future intégration évidente.
+Le code ne prétend pas que ces providers existent déjà : le document les marque comme cible future.
 
 ## Critères d'acceptation
 
-- toutes les transitions Relay et Unity utilisées par le code sont explicites et testées ;
+- transitions Relay et Unity actuellement utilisées par le code explicites et testées ;
 - `Action: TOOL` n'utilise plus l'état shell générique `EXECUTING` ;
 - un outil ne s'exécute jamais dans un état profil non autorisé ;
-- le premier outil Unity peut auto-effectuer le health check si le profil est encore `UNINITIALIZED` ;
-- une absence de Unity CLI place le profil en `USER_ACTION_REQUIRED` et bloque proprement l'outil ;
-- `unity.recompile` suit une transition `READY|EDITOR_READY -> COMPILING -> EDITOR_READY|ERROR` valide ;
+- premier outil Unity capable d'auto-effectuer le health check depuis `UNINITIALIZED` ;
+- Unity CLI absent → `USER_ACTION_REQUIRED` et outil bloqué ;
+- `unity.recompile` suit `READY|EDITOR_READY -> COMPILING -> EDITOR_READY|ERROR` ;
+- compile error C# → état récupérable `EDITOR_READY` ;
+- timeout/infra → `ERROR`, puis récupération uniquement via `unity.health`/`CHECKING` ;
 - toutes les machines actives conservent un chemin fail-safe ;
-- `STATE_MACHINE.md` décrit le fonctionnement réellement implémenté et distingue clairement présent/futur ;
+- machine complète compréhensible dans `UNITY_STATE_MACHINE.md`, avec présent/futur séparés ;
 - CI Ubuntu/Windows Python 3.11/3.12 verte.
+
+## Validation
+
+- Une première CI de développement a échoué uniquement parce qu'un nouveau faux `ToolDescriptor` de test omettait son champ obligatoire `description`. Le test a été corrigé ; il ne s'agissait pas d'une panne runtime.
+- La matrice suivante au commit `674f486` est verte sur Ubuntu/Windows × Python 3.11/3.12.
+- Le test de récupération explicite `ERROR -> unity.health -> CHECKING -> READY` a ensuite été ajouté ; sa matrice doit être verte avant fusion.
+- Aucune validation physique Unity n'est revendiquée ici : GitHub CI n'embarque pas l'Editor ni Unity CLI de la machine utilisateur.
