@@ -17,7 +17,6 @@ from .profile_tool_runtime import ProfileToolRunner, format_tool_result
 from .profiles import (
     ProfileManager,
     ProfileRegistryError,
-    ProfileState,
     ToolExecutionError,
     ToolRequest,
     ToolResult,
@@ -47,7 +46,7 @@ class ProfiledClipboardAgentApp(ClipboardAgentApp):
         manager = getattr(self, "profile_manager", None)
         if manager is None:
             manager = ProfileManager(
-                build_default_profile_registry(),
+                build_default_profile_registry(desktop=getattr(self, "desktop", None)),
                 active_profile_id=getattr(self.settings, "profile_id", "generic"),
             )
             self.profile_manager = manager
