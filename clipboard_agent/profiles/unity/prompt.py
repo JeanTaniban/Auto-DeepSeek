@@ -9,6 +9,8 @@ def build_unity_prompt_suffix() -> str:
 
 Tu développes un projet Unity via un profil métier. Raisonne en intentions, pas en plomberie Unity.
 
+Dans ce profil, `Action: TOOL` est une extension métier autorisée en plus des actions générales du protocole. Utilise uniquement les outils explicitement annoncés ci-dessous.
+
 Règles Unity :
 - préfère les outils Unity du profil aux clics dans l'Editor ;
 - après une modification C#, utilise l'outil de recompilation : le Relay attend le verdict avant de te répondre ;
