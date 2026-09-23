@@ -28,7 +28,7 @@ class StatefulToolProfile(AgentProfile):
         return ProfileMetadata("stateful", "Stateful", "1")
 
     def detect_project(self, project_root: Path):
-        return DetectionResult(True, 1.0, project_type="stateful")
+        return DetectionResult(True, self.confidence if hasattr(self, "confidence") else 1.0, project_type="stateful")
 
     def health_check(self, project_root: Path, *, deep: bool = False):
         del project_root, deep
@@ -43,7 +43,7 @@ class StatefulToolProfile(AgentProfile):
 
     def tool_descriptors(self, project_root: Path):
         del project_root
-        return (ToolDescriptor(tool_id="demo", provider="demo"),)
+        return (ToolDescriptor(tool_id="demo", provider="demo", description="Demo tool"),)
 
     def prepare_tool(self, request: ToolRequest, project_root: Path):
         del request, project_root
