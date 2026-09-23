@@ -12,6 +12,7 @@ from clipboard_agent.profiles import (
     ProfileRegistry,
     ProfileRegistryError,
     ProfileState,
+    UnityProfile,
     build_default_profile_registry,
 )
 from clipboard_agent.prompt_builder import build_initial_prompt
@@ -43,10 +44,11 @@ class DummyProfile(AgentProfile):
         self.shutdown_calls += 1
 
 
-def test_default_registry_contains_only_generic_profile():
+def test_default_registry_contains_generic_and_unity_profiles():
     registry = build_default_profile_registry()
-    assert [m.profile_id for m in registry.metadata()] == ["generic"]
+    assert [m.profile_id for m in registry.metadata()] == ["generic", "unity"]
     assert registry.get("generic").metadata.display_name == "Développement général"
+    assert isinstance(registry.get("unity"), UnityProfile)
 
 
 def test_registry_rejects_duplicate_ids_and_display_names():
