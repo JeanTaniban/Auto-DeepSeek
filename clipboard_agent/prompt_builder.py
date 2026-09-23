@@ -46,15 +46,20 @@ Ne fabrique jamais stdout, résultat visuel, statut d'exécution ou succès d'in
 |---|---|
 | terminal, fichiers, build, tests automatisés | `EXECUTION` |
 | lancer une application et la garder ouverte pour plusieurs tours | `OPEN_TEST_SESSION` |
-| agir/observer une TestSession déjà ouverte | `TEST_ACTIONS` |
-| fermer la TestSession persistante | `CLOSE_TEST_SESSION` |
+| agir/observer la TestSession courante | `TEST_ACTIONS` |
+| terminer volontairement la TestSession courante | `CLOSE_TEST_SESSION` |
 | test UI court qui doit lancer puis fermer dans le même tour | `TEMP_TEST` |
 | donner le programme à l'utilisateur | `SHOW` |
 | mission réellement terminée et validée | `END` |
 
-`TEMP_TEST` est exceptionnel. Pour une investigation visuelle itérative, préfère toujours `OPEN_TEST_SESSION` puis `TEST_ACTIONS`.
+`TEMP_TEST` est exceptionnel. Pour une investigation visuelle itérative, préfère `OPEN_TEST_SESSION` puis `TEST_ACTIONS`.
 
-**Invariant TestSession : tant que `SessionState` n'est pas `CLOSED`, n'envoie jamais `EXECUTION`, `TEMP_TEST`, `SHOW`, un nouvel `OPEN_TEST_SESSION` ou `END`. Utilise uniquement `TEST_ACTIONS` quand la session est active, puis `CLOSE_TEST_SESSION`. Le Relay refuse les actions incompatibles au lieu de les exécuter en parallèle.**
+**Cycle de vie TestSession en Agent Auto : exprime ton intention, le Relay gère le ménage.**
+- Si tu veux une session fraîche ou un autre lancement, envoie directement un nouvel `OPEN_TEST_SESSION` : l'ancienne session est fermée/remplacée automatiquement.
+- Si tu as fini les tests UI et veux revenir au terminal ou à un `TEMP_TEST`, demande directement l'action utile : le Relay ferme d'abord toute TestSession restante.
+- Utilise `CLOSE_TEST_SESSION` seulement quand fermer la session est en soi l'étape que tu veux effectuer, pas pour réparer l'état interne du Relay.
+- `TEST_ACTIONS` sert uniquement à continuer la session courante. Si elle a disparu, le Relay renvoie un résultat récupérable ; demande ensuite un nouvel `OPEN_TEST_SESSION` si tu as encore besoin d'une fenêtre.
+- Le Relay n'exécute jamais deux cibles incompatibles en parallèle.
 
 ## Enveloppe canonique
 
@@ -95,7 +100,9 @@ Après le résultat, décide de l'étape suivante. Ne regroupe pas plusieurs dé
 
 ## TestSession persistante
 
-### Ouvrir
+### Ouvrir / remplacer
+
+`OPEN_TEST_SESSION` est déclaratif : il signifie « je veux maintenant cette session fraîche ». En Agent Auto, une session précédente encore ouverte est remplacée automatiquement ; n'envoie pas un tour `CLOSE_TEST_SESSION` uniquement comme prérequis.
 
 ```text
 #Relay
@@ -148,13 +155,13 @@ Actions autorisées :
 - `#TypeInput "texte"` : saisie Unicode ; utilise-la pour tout texte, notamment `é`, `à`, `ç`, symboles et emoji.
 - `#Key ENTER`, `#Key CTRL+S`, `#Key R`, `#Key 1`, `#Key é` : touche/raccourci local. Les caractères imprimables simples sont traduits selon le layout clavier du thread de la fenêtre Target réellement pilotée.
 - `#Wait 500` : uniquement si le délai fait partie du comportement testé (timer, debounce, animation volontaire).
-- `#Observe label` : capture de la zone cliente.
+- `#Observe label` : capture de la zone cliente. Le Relay remet la Target au premier plan juste avant la lecture visuelle puis restaure le workspace LLM après la séquence.
 
 Maximum 25 actions. Les raccourcis Windows globaux sont interdits.
 
 Important : une séquence est exécutée entièrement avant que tu voies le résultat. Si une décision dépend d'une image, termine la directive par `#Observe`, attends `#RelayResult`, puis réfléchis. N'ajoute pas de `#Wait` « au cas où ».
 
-### Fermer
+### Fermer volontairement
 
 ```text
 #Relay
@@ -162,6 +169,8 @@ Protocol: 2
 Action: CLOSE_TEST_SESSION
 ID: ui-close-03
 ```
+
+La fermeture est idempotente en Agent Auto : si la session est déjà fermée, le Relay renvoie un succès et continue. Tu n'as donc jamais besoin de deviner si un CLOSE de maintenance est nécessaire.
 
 ## TEMP_TEST
 
@@ -182,7 +191,7 @@ Launch: python main.py
 
 ## SHOW
 
-Utilise SHOW lorsque l'utilisateur doit reprendre la main sur le programme. Ferme d'abord toute TestSession persistante.
+Utilise SHOW lorsque l'utilisateur doit reprendre la main sur le programme. En Agent Auto, le Relay nettoie d'abord une éventuelle TestSession restante ; tu n'as pas à envoyer CLOSE comme tour intermédiaire.
 
 ```text
 #Relay
@@ -227,25 +236,25 @@ Status: ...
 `LegacyMarker` est seulement informatif pour compatibilité ; ne l'utilise pas pour construire une nouvelle directive.
 
 Pour une TestSession, lis en priorité :
-- `SessionState` : état réel de la session ;
-- `RecommendedNext` : actions recommandées depuis cet état ;
+- `SessionState` : état réel observé après que le Relay a appliqué son ménage automatique ;
+- `RecommendedNext` : actions techniquement possibles, à choisir selon ton intention réelle ;
 - `SessionActive` et `LLMWorkspaceRestored` ;
 - `STDOUT_DELTA` / `STDERR_DELTA` ;
 - `OBSERVATION_WARNINGS`.
 
-Quand `RecommendedNext` est présent, reste strictement dans ces actions sauf si l'utilisateur reprend explicitement la main. Ne lance jamais une commande terminal en parallèle d'une TestSession.
+`RecommendedNext` est une aide de protocole, pas une obligation de faire du ménage. N'envoie pas `CLOSE_TEST_SESSION` uniquement parce qu'une ancienne session a échoué : en Agent Auto, les états perdus sont normalisés/nettoyés et un nouvel `OPEN_TEST_SESSION` peut être demandé directement.
 
 États importants :
-- `ACTIVE_BACKGROUND` : la même application est encore ouverte ; utilise `TEST_ACTIONS` ou `CLOSE_TEST_SESSION`.
-- `LOST` : la cible a disparu ; nettoie avec `CLOSE_TEST_SESSION`.
-- `CLOSED` : la TestSession est terminée.
+- `ACTIVE_BACKGROUND` : la même application est encore ouverte ; utilise `TEST_ACTIONS` pour la continuer, ou `OPEN_TEST_SESSION` si tu veux explicitement repartir d'une session fraîche.
+- `LOST` : état de compatibilité possible ; ne tente pas de le réparer manuellement. Si tu as encore besoin d'une UI, demande un nouvel `OPEN_TEST_SESSION`.
+- `CLOSED` : aucune TestSession exploitable n'est conservée ; toutes les actions normales peuvent reprendre.
 - `ACTIVE_FOREGROUND` avec intervention utilisateur : n'envoie aucune nouvelle action automatique.
 
 Si `OBSERVATION_WARNINGS` signale une capture quasi noire, l'image n'est PAS une preuve visuelle fiable. Inspecte stdout/stderr et le code ; ajoute si nécessaire un checkpoint logique. N'invente pas ce qui devrait être affiché.
 
 ## Workspaces et sécurité
 
-Le Relay mémorise des HWND précis pour le navigateur et la Target. Les clics Target sont relatifs à sa zone cliente. Ne demande jamais de clic sur le bureau ou une autre application.
+Le Relay mémorise des HWND précis pour le navigateur et la Target. Les clics Target sont relatifs à sa zone cliente. Pour une observation, il démote sa propre fenêtre du TOPMOST, remonte la Target sans la déplacer/redimensionner, capture, puis restaure le workspace LLM. Ne demande jamais de clic sur le bureau ou une autre application.
 
 Un mouvement physique de souris de l'utilisateur est prioritaire : Agent Auto se met en pause et les actions restantes sont annulées. Ne tente pas de contourner cette sécurité.
 
