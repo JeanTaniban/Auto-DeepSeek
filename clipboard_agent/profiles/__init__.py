@@ -5,16 +5,13 @@ from .generic import GenericProfile
 from .manager import ProfileManager
 from .models import DetectionResult, HealthCheck, HealthReport, HealthStatus, ProfileMetadata, ProfileState
 from .registry import ProfileRegistry, ProfileRegistryError
+from .tools import ToolDescriptor, ToolExecutionError, ToolNature, ToolRequest, ToolResult
+from .unity import UnityProfile
 
 
 def build_default_profile_registry() -> ProfileRegistry:
-    """Return the profiles shipped by this build.
-
-    P0 intentionally registers only GenericProfile. Unity is introduced in
-    later phases so the current Relay behavior remains the only executable
-    profile until its specialized provider is implemented and validated.
-    """
-    return ProfileRegistry((GenericProfile(),))
+    """Return the profiles shipped by this build."""
+    return ProfileRegistry((GenericProfile(), UnityProfile()))
 
 
 __all__ = [
@@ -29,5 +26,11 @@ __all__ = [
     "ProfileRegistry",
     "ProfileRegistryError",
     "ProfileState",
+    "ToolDescriptor",
+    "ToolExecutionError",
+    "ToolNature",
+    "ToolRequest",
+    "ToolResult",
+    "UnityProfile",
     "build_default_profile_registry",
 ]
