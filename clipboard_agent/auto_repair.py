@@ -145,6 +145,7 @@ def format_system_error_result(
             "#RelayResult",
             "Protocol: 2",
             "Kind: SYSTEM_ERROR",
+            "LegacyMarker: #SystemError",
             f"ID: {event_id}",
             "Status: ERROR",
             "Severity: RECOVERABLE",
