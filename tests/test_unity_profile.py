@@ -165,6 +165,31 @@ def test_unity_profile_executes_recompile_as_domain_tool(tmp_path):
     assert result.data["barrier"] == "COMPILE_SETTLED"
 
 
+def test_unity_profile_preserves_recompile_timeout_status(tmp_path):
+    root = _unity_project(tmp_path)
+    cli = FakeCli(UnityCliResult(
+        args=("unity", "recompile"),
+        exit_code=None,
+        stdout="",
+        stderr="",
+        timed_out=True,
+    ))
+    profile = UnityProfile(cli=cli)
+    result = profile.execute_tool(
+        ToolRequest(
+            request_id="compile-timeout",
+            profile_id="unity",
+            provider="unity-cli",
+            tool_id="unity.recompile",
+            timeout=12,
+        ),
+        root,
+    )
+    assert result.status == ExecutionStatus.TIMEOUT
+    assert result.data["outcome"] == "TIMEOUT"
+    assert cli.calls == [(root, 12)]
+
+
 def test_unity_prompt_keeps_llm_visual_contract_simple(tmp_path):
     root = _unity_project(tmp_path)
     prompt = UnityProfile(cli=FakeCli()).build_initial_prompt(
@@ -174,6 +199,7 @@ def test_unity_prompt_keeps_llm_visual_contract_simple(tmp_path):
         os_name="Windows",
     )
     assert "Profil actif : Unity" in prompt
+    assert "`Action: TOOL` est une extension métier autorisée" in prompt
     assert "GAME" in prompt and "SCENE" in prompt and "EDITOR" in prompt and "RUNTIME" in prompt
     assert "ne choisis jamais toi-même MCP/Win32/backend de capture" in prompt
     assert "n'utilise pas de délai arbitraire" in prompt
