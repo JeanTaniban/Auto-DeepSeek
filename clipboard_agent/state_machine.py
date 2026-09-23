@@ -17,6 +17,7 @@ class AutoState(str, Enum):
     WAITING_INITIAL_CLIPBOARD = "WAITING_INITIAL_CLIPBOARD"
     PROCESSING_INITIAL_REPLY = "PROCESSING_INITIAL_REPLY"
     RECOVERING_LAST_RESULT = "RECOVERING_LAST_RESULT"
+    RECOVERING_SYSTEM_ERROR = "RECOVERING_SYSTEM_ERROR"
     WAITING_CLIPBOARD = "WAITING_CLIPBOARD"
     PROCESSING_REPLY = "PROCESSING_REPLY"
     EXECUTING = "EXECUTING"
@@ -55,6 +56,7 @@ _ALLOWED: dict[AutoState, frozenset[AutoState]] = {
     AutoState.WAITING_INITIAL_CLIPBOARD: frozenset({AutoState.PROCESSING_INITIAL_REPLY, AutoState.PAUSED, AutoState.OFF}),
     AutoState.PROCESSING_INITIAL_REPLY: frozenset((*_PROCESSING_TARGETS, AutoState.RECOVERING_LAST_RESULT)),
     AutoState.RECOVERING_LAST_RESULT: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
+    AutoState.RECOVERING_SYSTEM_ERROR: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
     AutoState.WAITING_CLIPBOARD: frozenset({AutoState.PROCESSING_REPLY, AutoState.PAUSED, AutoState.OFF}),
     AutoState.PROCESSING_REPLY: _PROCESSING_TARGETS,
     AutoState.EXECUTING: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
@@ -70,6 +72,13 @@ _ALLOWED: dict[AutoState, frozenset[AutoState]] = {
     AutoState.TEST_CLOSING: frozenset({AutoState.SENDING, AutoState.PAUSED, AutoState.OFF}),
     AutoState.PAUSED: frozenset({AutoState.OFF}),
 }
+
+# Auto repair self is a control-plane escape hatch, not a normal work state.
+# Every active state may report a recoverable system fault, but OFF/PAUSED do
+# not resume implicitly and recovery itself cannot recursively re-enter itself.
+for _source in tuple(_ALLOWED):
+    if _source not in {AutoState.OFF, AutoState.PAUSED, AutoState.RECOVERING_SYSTEM_ERROR}:
+        _ALLOWED[_source] = frozenset((*_ALLOWED[_source], AutoState.RECOVERING_SYSTEM_ERROR))
 
 
 @dataclass(slots=True)
