@@ -6,27 +6,33 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from .app import ClipboardAgentApp, PANEL
+from .app import ClipboardAgentApp
 from .managed_test_session import ManagedPersistentTestSession
 from .models import AgentDirective, ExecutionRequest, ExecutionStatus
+from .profile_tool_host import ProfileToolHostMixin
 from .profiles import ProfileManager, ProfileRegistryError, build_default_profile_registry
 from .state_machine import AutoState
 from .test_session import TestSessionResult, TestSessionState
 from .win32_input import enable_per_monitor_dpi_awareness
 
 
-class ProfiledClipboardAgentApp(ClipboardAgentApp):
-    """ClipboardAgentApp with profiles and managed TestSession lifecycle."""
+class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
+    """ClipboardAgentApp with profile selection and managed TestSession lifecycle.
+
+    Profile-tool protocol/runtime glue is isolated in ProfileToolHostMixin and
+    concrete domain behavior remains inside profile packages.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.test_session = ManagedPersistentTestSession(self.desktop, self.executor, self.workspace)
+        self._init_profile_tool_host()
 
     def _ensure_profile_manager(self) -> ProfileManager:
         manager = getattr(self, "profile_manager", None)
         if manager is None:
             manager = ProfileManager(
-                build_default_profile_registry(),
+                build_default_profile_registry(desktop=getattr(self, "desktop", None)),
                 active_profile_id=getattr(self.settings, "profile_id", "generic"),
             )
             self.profile_manager = manager
@@ -63,10 +69,12 @@ class ProfiledClipboardAgentApp(ClipboardAgentApp):
         super()._save_settings()
 
     def _profile_switch_blocked(self) -> bool:
+        runner = getattr(self, "profile_tool_runner", None)
         return bool(
             self.auto_enabled
             or self.executor.running
             or self.target_runner.running
+            or (runner is not None and runner.running)
             or self.test_session.state != TestSessionState.CLOSED
         )
 
@@ -78,7 +86,7 @@ class ProfiledClipboardAgentApp(ClipboardAgentApp):
             self.profile_var.set(previous_name)
             messagebox.showwarning(
                 "Changement de profil indisponible",
-                "Arrêtez Agent Auto et fermez toute commande/Target App/TestSession avant de changer de profil.",
+                "Arrêtez Agent Auto et fermez toute commande/outil/Target App/TestSession avant de changer de profil.",
             )
             return
         try:
@@ -89,14 +97,23 @@ class ProfiledClipboardAgentApp(ClipboardAgentApp):
             return
         self.settings.profile_id = manager.active_profile_id
         self.store.save(self.settings)
-        self._refresh_profile_status()
+        self._refresh_profile_status(run_health=True)
 
-    def _refresh_profile_status(self) -> None:
+    def _refresh_profile_status(self, *, run_health: bool = False) -> None:
         if not hasattr(self, "profile_status_var"):
             return
         manager = self._ensure_profile_manager()
         profile = manager.active_profile
-        self.profile_status_var.set(f"{profile.current_state().value} · v{profile.metadata.version}")
+        health = ""
+        if run_health:
+            try:
+                report = profile.health_check(self._project_root())
+                health = f" · health {report.overall.value}"
+            except Exception as exc:
+                health = f" · health ERROR ({exc})"
+        self.profile_status_var.set(
+            f"{profile.current_state().value} · v{profile.metadata.version}{health}"
+        )
 
     def _build_prompt(self) -> str:
         root = self._project_root()
@@ -108,6 +125,8 @@ class ProfiledClipboardAgentApp(ClipboardAgentApp):
             shell=shell,
             os_name=platform.system(),
         )
+
+    # ------------------------- managed TestSession -------------------------
 
     def _auto_dispose_test_session(self, reason: str) -> bool:
         state = self.test_session.state

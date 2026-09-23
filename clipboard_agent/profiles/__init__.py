@@ -5,16 +5,24 @@ from .generic import GenericProfile
 from .manager import ProfileManager
 from .models import DetectionResult, HealthCheck, HealthReport, HealthStatus, ProfileMetadata, ProfileState
 from .registry import ProfileRegistry, ProfileRegistryError
+from .tools import ToolDescriptor, ToolExecutionError, ToolNature, ToolRequest, ToolResult
+from .unity import UnityProfile
 
 
-def build_default_profile_registry() -> ProfileRegistry:
-    """Return the profiles shipped by this build.
+def build_default_profile_registry(*, desktop=None) -> ProfileRegistry:
+    """Return shipped profiles, optionally wiring local UI capabilities.
 
-    P0 intentionally registers only GenericProfile. Unity is introduced in
-    later phases so the current Relay behavior remains the only executable
-    profile until its specialized provider is implemented and validated.
+    The generic core passes only infrastructure abstractions (for example the
+    Win32 desktop object). Unity-specific provider selection remains contained
+    in the Unity profile package.
     """
-    return ProfileRegistry((GenericProfile(),))
+    unity = UnityProfile()
+    if desktop is not None:
+        from .unity.visual import UnityVisualRouter
+        from .unity.windows_visual import UnityEditorWindowVisualProvider
+
+        unity.visual_router = UnityVisualRouter((UnityEditorWindowVisualProvider(desktop),))
+    return ProfileRegistry((GenericProfile(), unity))
 
 
 __all__ = [
@@ -29,5 +37,11 @@ __all__ = [
     "ProfileRegistry",
     "ProfileRegistryError",
     "ProfileState",
+    "ToolDescriptor",
+    "ToolExecutionError",
+    "ToolNature",
+    "ToolRequest",
+    "ToolResult",
+    "UnityProfile",
     "build_default_profile_registry",
 ]

@@ -28,6 +28,7 @@ class DirectiveKind(str, Enum):
     OPEN_TEST_SESSION = "OPEN_TEST_SESSION"
     CLOSE_TEST_SESSION = "CLOSE_TEST_SESSION"
     TEST_ACTIONS = "TEST_ACTIONS"
+    TOOL = "TOOL"
     END = "END"
 
 
