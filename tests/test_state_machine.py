@@ -41,6 +41,22 @@ def test_normal_cycle_cannot_enter_initial_recovery_branch():
         sm.transition(AutoState.RECOVERING_LAST_RESULT)
 
 
+def test_system_error_recovery_is_available_from_every_active_non_paused_state():
+    for state in AutoState:
+        if state in {AutoState.OFF, AutoState.PAUSED, AutoState.RECOVERING_SYSTEM_ERROR}:
+            continue
+        sm = AutoStateMachine(state)
+        assert sm.transition(AutoState.RECOVERING_SYSTEM_ERROR) == AutoState.RECOVERING_SYSTEM_ERROR
+        assert sm.transition(AutoState.SENDING) == AutoState.SENDING
+
+
+def test_system_error_recovery_cannot_resume_from_off_or_paused():
+    for state in (AutoState.OFF, AutoState.PAUSED):
+        sm = AutoStateMachine(state)
+        with pytest.raises(AutoTransitionError):
+            sm.transition(AutoState.RECOVERING_SYSTEM_ERROR)
+
+
 def test_user_intervention_can_pause_from_every_active_state():
     active_states = [
         AutoState.STARTING,
@@ -48,6 +64,7 @@ def test_user_intervention_can_pause_from_every_active_state():
         AutoState.WAITING_INITIAL_CLIPBOARD,
         AutoState.PROCESSING_INITIAL_REPLY,
         AutoState.RECOVERING_LAST_RESULT,
+        AutoState.RECOVERING_SYSTEM_ERROR,
         AutoState.WAITING_CLIPBOARD,
         AutoState.PROCESSING_REPLY,
         AutoState.EXECUTING,
