@@ -90,6 +90,7 @@ def test_system_error_result_is_explicit_and_actionable():
         attempt=2,
     )
     assert text.startswith("#RelayResult\nProtocol: 2\nKind: SYSTEM_ERROR")
+    assert "LegacyMarker: #SystemError" in text
     assert "Status: ERROR" in text
     assert "Severity: RECOVERABLE" in text
     assert "Source: RELAY" in text
