@@ -1,4 +1,4 @@
-from clipboard_agent.app import main
+from clipboard_agent.profiled_app import main
 
 if __name__ == "__main__":
     main()
