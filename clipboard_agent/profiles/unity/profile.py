@@ -98,7 +98,8 @@ class UnityProfile(AgentProfile):
         return HealthReport(tuple(checks))
 
     def prepare_tool(self, request: ToolRequest, project_root: Path) -> None:
-        del request
+        if request.tool_id == "unity.health":
+            return
         if self._machine.state == UnityProfileState.UNINITIALIZED:
             self.health_check(project_root)
 
@@ -117,6 +118,23 @@ class UnityProfile(AgentProfile):
         if read_unity_project(project_root) is None:
             return ()
         return (
+            ToolDescriptor(
+                tool_id="unity.health",
+                provider="unity-profile",
+                description="Revérifie le projet et Unity CLI et tente une récupération d'état explicite.",
+                nature=ToolNature.READ,
+                risk=RiskLevel.LOW,
+                allowed_states=(
+                    ProfileState.UNINITIALIZED,
+                    ProfileState.READY,
+                    ProfileState.USER_ACTION_REQUIRED,
+                    ProfileState.DEGRADED,
+                    ProfileState.ERROR,
+                ),
+                timeout=30,
+                completion_barrier=CompletionBarrier.NONE.value,
+                idempotent=True,
+            ),
             ToolDescriptor(
                 tool_id="unity.recompile",
                 provider="unity-cli",
@@ -149,6 +167,23 @@ class UnityProfile(AgentProfile):
                 f"(Unity={self._machine.state.value})."
             )
 
+    @staticmethod
+    def _health_data(report: HealthReport, unity_state: UnityProfileState) -> dict[str, object]:
+        return {
+            "overall": report.overall.value,
+            "unityState": unity_state.value,
+            "checks": [
+                {
+                    "id": check.check_id,
+                    "status": check.status.value,
+                    "message": check.message,
+                    "remediation": check.remediation,
+                    "details": check.details,
+                }
+                for check in report.checks
+            ],
+        }
+
     def execute_tool(self, request: ToolRequest, project_root: Path) -> ToolResult:
         if request.profile_id != self.metadata.profile_id:
             raise ToolExecutionError(
@@ -156,6 +191,20 @@ class UnityProfile(AgentProfile):
             )
         if read_unity_project(project_root) is None:
             raise ToolExecutionError("La racine sélectionnée n'est pas un projet Unity valide.")
+
+        if request.tool_id == "unity.health":
+            report = self.health_check(project_root)
+            success = report.overall in {HealthStatus.PASS, HealthStatus.WARN}
+            return ToolResult(
+                request_id=request.request_id,
+                profile_id=self.metadata.profile_id,
+                provider=request.provider,
+                tool_id=request.tool_id,
+                status=ExecutionStatus.SUCCESS if success else ExecutionStatus.ERROR,
+                profile_state=self.current_state(),
+                data=self._health_data(report, self._machine.state),
+                recommended_next=("TOOL",) if success else ("TOOL", "END"),
+            )
 
         self._ensure_tool_ready(request, project_root)
 
