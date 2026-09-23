@@ -1,6 +1,6 @@
-# Machine d’état — Clipboard Agent Relay V2.15
+# Machine d’état — Clipboard Agent Relay V2.16
 
-Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.15 conserve la machine d’état runtime typée et ajoute une réconciliation locale du cycle de vie TestSession dans la couche `ProfiledClipboardAgentApp` : les états techniques ne doivent plus imposer au LLM des tours de ménage.
+Le code de référence est `clipboard_agent/state_machine.py`. Une transition Agent Auto non autorisée déclenche un arrêt fail-safe. La V2.16 conserve la réconciliation locale TestSession de la V2.15 et ajoute une voie explicite `RECOVERING_SYSTEM_ERROR` pour les incidents système récupérables lorsque l'option `Auto repair self` est activée.
 
 ## 1. Fenêtres et workspaces
 
@@ -26,7 +26,7 @@ TARGET_WORKSPACE
 
 Le Relay ne cherche plus « Chrome » ou « DeepSeek » par nom. Le HWND lié reste la référence pendant la session Auto. Avant toute saisie/clic navigateur ou Target, le foreground est vérifié/restauré.
 
-En V2.15, la préparation `TARGET_WORKSPACE` est aussi réappliquée **au point exact de chaque lecture visuelle** : avant les polls de readiness et avant chaque observation/screenshot marker. Cela empêche une fenêtre Relay topmost de masquer la cible tout en fournissant malgré tout des pixels non noirs.
+En V2.15+, la préparation `TARGET_WORKSPACE` est aussi réappliquée **au point exact de chaque lecture visuelle** : avant les polls de readiness et avant chaque observation/screenshot marker. Cela empêche une fenêtre Relay topmost de masquer la cible tout en fournissant malgré tout des pixels non noirs.
 
 ## 2. États Agent Auto
 
@@ -36,12 +36,14 @@ En V2.15, la préparation `TARGET_WORKSPACE` est aussi réappliquée **au point 
 - `WAITING_INITIAL_CLIPBOARD`
 - `PROCESSING_INITIAL_REPLY`
 - `RECOVERING_LAST_RESULT`
+- `RECOVERING_SYSTEM_ERROR`
 - `EXECUTING`
-- `TARGET_STARTING` / `TARGET_RUNNING` / `TARGET_RESTORING` : `Action: TEMP_TEST` (ancien format temporaire conservé en compatibilité)
-- `TEST_OPENING` : ouverture d’une TestSession persistante
-- `TEST_ACTING` : actions sur la TestSession persistante
-- `TEST_RESTORING` : retour du workspace Target vers le LLM
-- `TEST_CLOSING` : fermeture explicite de la TestSession
+- `PROFILE_TOOL_RUNNING`
+- `TARGET_STARTING` / `TARGET_RUNNING` / `TARGET_RESTORING`
+- `TEST_OPENING`
+- `TEST_ACTING`
+- `TEST_RESTORING`
+- `TEST_CLOSING`
 - `SENDING`
 - `WAITING_VISUAL`
 - `WAITING_CLIPBOARD`
@@ -50,7 +52,9 @@ En V2.15, la préparation `TARGET_WORKSPACE` est aussi réappliquée **au point 
 
 `PAUSED` ne reprend jamais automatiquement : il faut arrêter puis redémarrer Agent Auto.
 
-La réconciliation V2.15 ne crée pas un nouvel état Auto : elle est exécutée synchroniquement depuis `PROCESSING_*` avant de router la directive utile, puis la machine entre normalement dans `EXECUTING`, `TARGET_STARTING`, `TEST_OPENING`, etc.
+`RECOVERING_SYSTEM_ERROR` n'est pas un état de travail métier. Il sert uniquement à transformer un défaut système récupérable en résultat structuré adressé au LLM. Il ne peut ensuite aller que vers `SENDING`, `PAUSED` ou `OFF`.
+
+La réconciliation TestSession ne crée pas un nouvel état Auto : elle est exécutée synchroniquement depuis `PROCESSING_*` avant de router la directive utile.
 
 ## 3. Démarrage Auto
 
@@ -83,8 +87,6 @@ RECOVERING_LAST_RESULT
 SENDING
 ```
 
-Cette récupération couvre les actions canoniques `EXECUTION`, `TEMP_TEST`, `OPEN_TEST_SESSION`, `TEST_ACTIONS` et `CLOSE_TEST_SESSION` ; les anciens marqueurs sont traduits vers les mêmes types internes.
-
 ## 4. Cycle normal LLM
 
 ```text
@@ -98,7 +100,43 @@ PROCESSING_REPLY
  ↓ directive suivante
 ```
 
-Les délais d’UI configurables sont séquentiels : résultat→prompt, prompt→collage, collage→Envoyer, Envoyer→surveillance, stabilité→Copier. Les timeouts et durées de stabilité ne sont pas randomisés.
+Les délais d’UI configurables sont séquentiels. Les timeouts et durées de stabilité ne sont pas randomisés.
+
+### 4.1 Auto repair self
+
+Lorsque `Settings.auto_repair_self == true`, tout état Auto actif admissible peut signaler un incident récupérable :
+
+```text
+<état Auto actif>
+      |
+      | erreur système récupérable
+      v
+RECOVERING_SYSTEM_ERROR
+      |
+      | #RelayResult Kind: SYSTEM_ERROR
+      v
+SENDING
+      v
+WAITING_VISUAL
+      v
+WAITING_CLIPBOARD
+      v
+PROCESSING_REPLY
+```
+
+Le message contient au minimum `Severity: RECOVERABLE`, `Source: RELAY`, l'état d'origine, un code stable et une description. Le LLM reprend ensuite avec une directive `#Relay` normale.
+
+Cette voie est interdite lorsque :
+
+- une opération locale est encore réellement en cours ;
+- l'erreur est une violation de machine d'état ;
+- une politique de sécurité `BLOCKED`/`SENSITIVE` est en jeu ;
+- le workspace/canal LLM ne peut plus être restauré ;
+- Win32 nécessaire au canal d'envoi est indisponible ;
+- l'utilisateur a repris physiquement la souris ;
+- un premier `SYSTEM_ERROR` est encore en cours de transmission.
+
+Anti-boucle : au plus 3 récupérations dans une fenêtre glissante de 120 s. Au-delà, `OFF` fail-safe.
 
 ## 5. `Action: EXECUTION`
 
@@ -122,7 +160,7 @@ PROCESSING_*
 EXECUTING
 ```
 
-Cette fermeture technique n’est pas un tour envoyé au LLM. Une commande sensible passe à `PAUSED`; une commande bloquée provoque `OFF`.
+Cette fermeture technique n’est pas un tour envoyé au LLM. Une commande sensible passe à `PAUSED`; une commande bloquée provoque `OFF` et n'est jamais auto-réparée.
 
 ## 6. TestSession persistante
 
@@ -148,7 +186,7 @@ CLOSED
 
 `LOST` indique que le processus ou sa fenêtre a disparu de manière inattendue.
 
-### Invariant V2.15 : intention plutôt que ménage
+### Invariant : intention plutôt que ménage
 
 En Agent Auto, une TestSession existante n’interdit plus à elle seule la directive suivante. Le Relay réconcilie d’abord l’état :
 
@@ -177,20 +215,10 @@ TEST_OPENING
  ↓
 TEST_RESTORING
  ↓ LLM_WORKSPACE vérifié
-SENDING  (#RelayResult Kind: TEST_SESSION / Operation: OPENED)
+SENDING
 ```
 
-Le processus reste ouvert après le résultat si `SessionActive: YES`.
-
-Readiness :
-
-- `Ready: window` : fenêtre exploitable trouvée ;
-- `Ready: delay:<ms>` : fenêtre trouvée puis délai explicite ;
-- `Ready: content` : plusieurs frames rendues non noires ;
-- `Ready: auto` : accepte une surface non noire stable **ou** un rendu dynamique actif ;
-- `Ready: checkpoint:<nom>` : attend `[[CAR_CHECKPOINT:<nom>]]` dans stdout puis exige seulement une surface rendue exploitable, sans imposer l’immobilité.
-
-Un settle configurable après activation absorbe la latence focus/peinture avant la vérification. Pendant la boucle de readiness, `ensure_target_workspace()` est rejoué avant chaque échantillonnage visible.
+Readiness : `window`, `delay:<ms>`, `content`, `auto`, `checkpoint:<nom>`.
 
 ### 6.2 Agir/observer
 
@@ -203,12 +231,8 @@ TEST_ACTING
  ↓
 TEST_RESTORING
  ↓ LLM_WORKSPACE vérifié
-SENDING (#RelayResult Kind: TEST_SESSION / Operation: ACTIONS)
+SENDING
 ```
-
-`#Observe` dans le payload TEST_ACTIONS ne redonne pas la main au LLM au milieu d’une séquence. Pour raisonner sur une image : terminer la séquence par `#Observe`, attendre le retour, puis envoyer une nouvelle directive.
-
-Avant chaque observation, y compris un screenshot marker devenu pending pendant que le LLM était au premier plan, le workspace Target est reconstruit immédiatement. La capture ne dépend donc pas d’un focus obtenu plusieurs secondes plus tôt.
 
 ### 6.3 Fermer
 
@@ -221,41 +245,25 @@ TEST_CLOSING
  ├─ stdout/stderr complets
  └─ restauration LLM_WORKSPACE
  ↓
-SENDING (#RelayResult Kind: TEST_SESSION / Operation: CLOSED)
+SENDING
 ```
 
-Si la session est déjà `CLOSED`, V2.15 suit le même chemin logique de résultat sans lancer de worker de fermeture ; le succès idempotent est directement renvoyé.
+Si la session est déjà `CLOSED`, le succès idempotent est directement renvoyé.
 
 ### 6.4 Réconciliation invisible au LLM
 
-Une fermeture déclenchée uniquement pour permettre une autre directive n’est pas formatée comme un `#RelayResult` indépendant. Par exemple :
-
-```text
-LLM demande OPEN B alors que OPEN A est encore ACTIVE_BACKGROUND
- ↓
-Relay ferme A localement
- ↓ aucun round-trip LLM
-Relay lance B
- ↓
-#RelayResult de B uniquement
-```
-
-Le LLM peut ainsi raisonner sur le produit à tester plutôt que sur la plomberie de session du Relay.
+Une fermeture déclenchée uniquement pour permettre une autre directive n’est pas formatée comme un `#RelayResult` indépendant.
 
 ## 7. Checkpoints stdout
-
-Le logiciel surveille stdout pendant toute la TestSession :
 
 ```text
 [[CAR_CHECKPOINT:main-window-ready]]
 [[CAR_SCREENSHOT:menu-open]]
 ```
 
-Le premier peut servir à `Ready: checkpoint:main-window-ready`. Le second programme une capture au prochain point d’interaction/readiness où la Target App peut être observée en sécurité.
+Le premier peut servir à `Ready: checkpoint:main-window-ready`. Le second programme une capture au prochain point sûr.
 
 ## 8. `Action: TEMP_TEST` et compatibilité historique
-
-`Action: TEMP_TEST` est le format canonique du comportement temporaire launch→actions→close. L’ancien format V1 correspondant reste accepté par compatibilité :
 
 ```text
 PROCESSING_*
@@ -266,11 +274,11 @@ PROCESSING_*
  → SENDING
 ```
 
-Il lance, agit, observe, ferme puis restitue. Les anciens alias d’actions restent compris par le parser, mais le prompt V2 n’en émet plus.
+Il lance, agit, observe, ferme puis restitue.
 
 ## 9. Priorité utilisateur et fail-safe
 
-Depuis tout état actif :
+Depuis tout état actif, y compris `RECOVERING_SYSTEM_ERROR` :
 
 ```text
 mouvement souris physique
@@ -279,33 +287,21 @@ mouvement souris physique
  → aucun clic navigateur tardif
 ```
 
-Pendant une interaction Target/TestSession, le drapeau d’intervention reste persistant jusqu’à la fin du worker. L’application cible est laissée à l’utilisateur si celui-ci reprend la main.
-
 Autres invariants :
 
 - une action Target n’est jamais dirigée vers un HWND arbitraire fourni par le LLM ;
 - `TARGET_WINDOW` doit appartenir au processus lancé ou à un descendant ;
 - les clics Target sont relatifs à la zone cliente ;
 - raccourcis Windows globaux interdits ;
-- restauration LLM impossible → aucun clic/paste navigateur ;
-- copie invalide/inchangée non justifiée → arrêt Auto ;
-- nouvelle directive dupliquée en cycle normal → arrêt fail-safe ;
-- reprise d’un dernier résultat uniquement au démarrage Auto avec ID + type exacts.
+- restauration LLM impossible → aucun clic/paste navigateur et aucun Auto repair self ;
+- copie invalide/inchangée : `SYSTEM_ERROR` si Auto repair self peut encore joindre le LLM, sinon arrêt ;
+- nouvelle directive dupliquée en cycle normal : récupérable uniquement si la politique la classe sans conflit local ;
+- reprise d’un dernier résultat uniquement au démarrage Auto avec ID + type exacts ;
+- échec pendant la transmission d'un `SYSTEM_ERROR` → `OFF`.
 
-## Readiness adaptative et observations
+## 10. Contrats de résultat V2
 
-La readiness d'une TestSession ne dépend plus uniquement d'une interface immobile :
-
-- `Ready: auto` accepte une surface non noire devenue stable ou un rendu dynamique actif sur plusieurs frames ;
-- `Ready: content` attend plusieurs frames non noires sans demander de stabilité ;
-- `Ready: checkpoint:<nom>` attend d'abord le checkpoint logique, puis une surface rendue exploitable ;
-- `Ready: window` ne prouve que l'existence du HWND et reste un mode volontairement faible.
-
-Un `#Observe` quasi noir est retenté de manière bornée. Si aucune frame exploitable n'est obtenue, l'observation reste jointe pour diagnostic mais est annotée `OBSERVATION_WARNINGS`. L'agent ne doit alors ni inventer le contenu attendu ni compenser par des délais arbitraires.
-
-## 10. Contrat de résultat V2
-
-Le runtime interne reste basé sur `AutoState` et `TestSessionState`, mais les résultats envoyés au LLM rendent désormais cet état explicite :
+Résultat TestSession :
 
 ```text
 #RelayResult
@@ -316,12 +312,32 @@ SessionState: ACTIVE_BACKGROUND
 RecommendedNext: TEST_ACTIONS,CLOSE_TEST_SESSION
 ```
 
-Cette information est descriptive de l’état réel après traitement. En V2.15, un état `LOST` ordinaire est auto-nettoyé avant envoi et devient `CLOSED`, afin de ne pas obliger l’agent à produire un CLOSE de maintenance. `LegacyMarker` n’a aucun rôle dans la machine d’état ; il sert seulement à la compatibilité avec les conversations V1.
+Résultat système V2.16 :
 
-## 11. Invariants V2.15 — réponse unique, clavier et capture
+```text
+#RelayResult
+Protocol: 2
+Kind: SYSTEM_ERROR
+ID: system-...
+Status: ERROR
+Severity: RECOVERABLE
+Source: RELAY
+AutoRepairSelf: ACTIVE
+AutoState: WAITING_VISUAL
+Code: VISUAL_TIMEOUT
+RecoveryAttempt: 1/3
+Description: ...
+Instruction: ...
+```
 
-- Une réponse de contrôle V2 contient uniquement une directive `#Relay` brute ou un unique bloc fenced qui constitue tout le message. Un bloc `#Relay` entouré de prose est rejeté.
+`SYSTEM_ERROR` ne modifie pas le protocole de directives : le tour suivant du LLM reste exactement une directive `#Relay` canonique.
+
+## 11. Invariants V2.16 — réponse unique, clavier, capture et réparation
+
+- Une réponse de contrôle V2 contient uniquement une directive `#Relay` brute ou un unique bloc fenced qui constitue tout le message.
 - `#TypeInput` transporte l'Unicode jusqu'à `SendInput(KEYEVENTF_UNICODE)`.
-- Un `#Key` caractère simple non alphabétique utilise le layout du thread de `TARGET_WINDOW` via `GetKeyboardLayout` + `VkKeyScanExW` (notamment chiffres AZERTY et caractères accentués), avec fallback `VkKeyScanW` lorsqu'aucun HWND cible n'est disponible puis fallback Unicode si aucune combinaison physique n'existe.
-- Avant actions et chaque lecture visuelle importante, le workspace Target démote le Relay de topmost puis remonte explicitement la Target, y compris si elle était déjà foreground.
+- Un `#Key` caractère simple non alphabétique utilise le layout du thread de `TARGET_WINDOW` via `GetKeyboardLayout` + `VkKeyScanExW`, avec fallbacks existants.
+- Avant actions et chaque lecture visuelle importante, le workspace Target démote le Relay de topmost puis remonte explicitement la Target.
 - La géométrie des fenêtres n’est pas modifiée pour réparer le Z-order/focus.
+- `Auto repair self` n'efface jamais la cause d'une erreur : elle est journalisée localement et renvoyée explicitement au LLM.
+- `Auto repair self` ne reprend jamais un état `PAUSED` et ne contourne jamais une politique de sécurité.
