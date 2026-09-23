@@ -1,6 +1,6 @@
 # Cahier des charges — Auto-DeepSeek / Clipboard Agent Relay
 
-**Version : 2.14**
+**Version : 2.15**
 **Cible principale : Windows 10/11, Python 3.11+**
 
 ## 1. Objectif
@@ -12,6 +12,14 @@ Le navigateur n’est pas piloté par DOM/API privée. Les interfaces locales re
 ### 1.1 Documents de cadrage spécialisés
 
 - `CDC_PROFILES_UNITY.md` — architecture générique des profils et spécification du premier profil métier Unity.
+
+### 1.2 Socle profils V2.15 / P0
+
+Le runtime possède désormais une couche de profils générique. La V2.15 P0 n’active qu’un seul profil exécutable : `generic` / **Développement général**. Il encapsule le comportement V2.14 sans modifier son protocole, sa sécurité, ses timings ni ses TestSessions.
+
+Le profil actif est persistant. Un profil mémorisé mais indisponible retombe sur `generic`. Le changement de profil est interdit pendant Agent Auto, une commande, une Target App ou une TestSession non fermée. Les futurs profils spécialisés doivent s’enregistrer via `ProfileRegistry`/`ProfileManager` plutôt que d’ajouter leur logique directement au cœur.
+
+`Action: TOOL` et les providers métier restent hors périmètre P0 ; ils appartiennent à la phase P1 du CDC spécialisé.
 
 ## 2. Destination Goal
 
@@ -82,27 +90,23 @@ Une seule directive de contrôle est autorisée par réponse. Le champ `Action` 
 - `OPEN_TEST_SESSION` : ouverture d’une application persistante ;
 - `TEST_ACTIONS` : actions sur la TestSession active ;
 - `CLOSE_TEST_SESSION` : fermeture de la TestSession ;
-- `TEMP_TEST` : test UI temporaire launch→actions→close ;
-- `SHOW` : démonstration utilisateur et arrêt Auto ;
+- `TEMP_TEST` : session temporaire launch→actions→close ;
+- `SHOW` : lancement visible avec reprise utilisateur ;
 - `END` : fin de mission.
 
 Le parser V2 doit :
 - exiger que la réponse de contrôle soit uniquement la directive brute ou exactement un seul bloc fenced `#Relay`, sans prose avant/après ;
 - exiger `Protocol: 2`, `Action` et un `ID` valide ;
-- rejeter les actions inconnues ;
+- rejeter une action inconnue ;
 - rejeter les métadonnées incompatibles avec l’action ;
-- reconnaître `#Relay` seulement comme première ligne utile du payload copié ou d’un bloc de code, afin qu’une citation dans de la prose ne déclenche pas le protocole ;
-- traduire la directive V2 vers les modèles internes `DirectiveKind` existants.
+- ne reconnaître le protocole canonique que si `#Relay` ouvre effectivement la réponse brute ou le premier contenu du bloc copiable ; une simple citation de `#Relay` dans une phrase n’est pas une directive ;
+- traduire vers les modèles internes existants.
 
-### 5.2 Compatibilité V1
+Le parser historique V1 reste disponible en dessous pour compatibilité avec les conversations déjà démarrées. Il ne doit plus être enseigné dans le prompt normal.
 
-Les anciens marqueurs restent acceptés afin de ne pas casser les conversations déjà initialisées avec un ancien prompt. Ils ne sont plus enseignés dans le prompt canonique et ne doivent plus être utilisés pour les nouvelles missions.
+### 5.2 Résultats canoniques
 
-Les alias historiques et raccourcis d’actions restent donc une **couche de compatibilité parser**, pas une surface utilisateur normale.
-
-### 5.3 Résultats V2
-
-Les résultats canoniques commencent par un préambule commun :
+Les résultats commencent par un en-tête commun :
 
 ```text
 #RelayResult
@@ -111,15 +115,17 @@ Kind: ...
 LegacyMarker: ...
 ID: ...
 Status: ...
+RecommendedNext: ...
 ```
 
-`LegacyMarker` maintient la reconnaissance par les anciens prompts.
+`LegacyMarker` facilite la migration mais n’est pas une directive à réutiliser.
 
 Pour les TestSessions, le résultat expose aussi :
-- `SessionState` : état réel de la session ;
-- `RecommendedNext` : actions recommandées depuis cet état ;
+
+- `SessionState` ;
 - `SessionActive` ;
-- `LLMWorkspaceRestored`.
+- `LLMWorkspaceRestored` ;
+- `RecommendedNext`.
 
 Le but est que le LLM n’ait pas à reconstruire implicitement la machine d’état à partir de texte libre.
 
@@ -129,66 +135,39 @@ Tant que `TestSessionState` n'est pas `CLOSED`, Agent Auto doit refuser les acti
 
 Modes :
 
-- `auto` : fenêtre détectée + contenu rendu ; valide ensuite une UI stable **ou** un rendu dynamique actif ;
+- `auto` : surface rendue non noire, puis interface stable **ou** rendu dynamique actif ;
 - `content` : plusieurs frames non noires, sans exigence de stabilité ;
-- `window` : fenêtre détectée uniquement ;
-- `delay:<ms>` : délai explicite, non recommandé comme mécanisme de readiness ;
-- `checkpoint:<nom>` : marqueur stdout puis présence d'une surface rendue exploitable.
+- `checkpoint:<nom>` : attend `[[CAR_CHECKPOINT:nom]]`, puis une surface rendue exploitable ;
+- `window` : existence du HWND uniquement ;
+- `delay:<ms>` : délai explicite, réservé aux cas où aucun signal plus robuste n’existe.
 
-Un délai de settle après activation est configurable avant évaluation.
+`#Wait` dans les actions reste possible pour des délais fonctionnels testés, mais ne doit pas servir à deviner la readiness.
 
-Marqueurs stdout :
+## 7. Captures et observations
 
-```text
-[[CAR_CHECKPOINT:nom]]
-[[CAR_SCREENSHOT:label]]
-```
+`#Observe` capture la zone cliente originale de la Target.
 
-Le premier synchronise une readiness. Le second programme une observation à la prochaine phase où la Target App est activée/observable.
+Comportement :
 
-## 7. Captures visuelles Target
+1. capture normale GDI ;
+2. si quasi noire, retry borné ;
+3. fallback Win32 `PrintWindow` ;
+4. conservation de la frame la plus informative ;
+5. si toujours quasi noire, résultat avec `OBSERVATION_WARNINGS`.
 
-`#Observe` capture uniquement la zone cliente de `TARGET_WINDOW`. Une capture quasi noire déclenche un fallback Win32 puis des retries bornés ; la frame la plus informative est conservée. Si elle reste quasi noire, le résultat la marque explicitement dans `OBSERVATION_WARNINGS` afin qu'elle ne soit pas interprétée comme preuve visuelle fiable. Plusieurs captures peuvent être composées en une planche envoyée au LLM. Le redimensionnement éventuel de la planche ne change jamais le repère des futurs `#Click`, qui reste la taille cliente originale indiquée dans le résultat.
+Une capture noire signalée ne doit pas être présentée au LLM comme preuve visuelle fiable.
 
-## 8. Détection réponse LLM
+## 8. Timings
 
-La zone Réponse agent configurée sert uniquement au mouvement/stabilité.
+Tous les timings Auto/Target/TestSession sont persistants et volontairement conservateurs. Ils doivent rester configurables et ne pas être resserrés sans validation physique.
 
-Le bouton Copier est détecté séparément sur l’écran virtuel entier :
+Une variation bornée des délais UI peut être configurée pour absorber des latences locales ; les timeouts et seuils de stabilité restent déterministes.
 
-- image de référence persistante ;
-- template non redimensionné ;
-- matching 1:1 ;
-- seuil configurable ;
-- clic uniquement si le déplacement réel du curseur vers le point calculé est confirmé.
+## 9. Sécurité
 
-Un bouton diagnostic déplace le curseur sans cliquer et sauvegarde écran/template/match.
-
-## 9. Timings
-
-Persistants et configurables :
-
-- résultat→début renvoi ;
-- clipboard→prompt ;
-- prompt→paste ;
-- paste→Envoyer ;
-- Envoyer→surveillance ;
-- stabilité→Copier ;
-- timeout/stabilité réponse ;
-- détection fenêtre Target ;
-- délai entre actions ;
-- fermeture/restauration ;
-- readiness stable/poll ;
-- settle activation TestSession.
-
-Une variation bornée des délais UI peut être configurée pour absorber des latences d’interface. Elle ne modifie ni timeouts, ni durées de stabilité, ni règles de sécurité.
-
-## 10. Sécurité
-
-- mouvement souris physique → pause immédiate ;
-- événement souris injecté par le logiciel ignoré par le détecteur ;
-- commande shell classée LOW/MODIFY/SENSITIVE/BLOCKED ;
-- SENSITIVE → validation/pause ;
+- LOW → exécution Auto possible ;
+- MODIFY → exécution Auto possible ;
+- SENSITIVE → validation humaine ;
 - BLOCKED → refus ;
 - Target limitée au PID lancé/descendants ;
 - raccourcis globaux Windows interdits ;
@@ -196,79 +175,15 @@ Une variation bornée des délais UI peut être configurée pour absorber des la
 - aucun HWND arbitraire fourni par le LLM ;
 - impossible de reprendre `PAUSED` automatiquement ;
 - reprise d’une directive déjà traitée uniquement au démarrage Auto avec ID/type exacts ;
-- clipboard interne normalisé pour éviter l’auto-lecture.
+- un profil métier ne peut pas contourner ces protections.
 
-## 11. Données / confidentialité
+## 10. Tests / CI
 
-- fonctionnement local ;
-- pas de télémétrie par défaut ;
-- le presse-papiers général n’est pas historisé ;
-- seuls les messages conformes au protocole sont traités ;
-- redaction de secrets avant renvoi au LLM ;
-- fichiers `.env` non intégrés automatiquement.
+Validation minimale à chaque intégration :
 
-## 12. Persistance
+- `python -m compileall -q clipboard_agent main.py` ;
+- `python -m pytest -q` ;
+- GitHub Actions Ubuntu/Windows × Python 3.11/3.12 ;
+- smoke-test launcher Windows.
 
-Configuration : `~/.clipboard_agent_relay/settings.json`.
-
-Persistants notamment : Goal/projet, setup Auto, template Copier, timings, seuils.
-
-`Nouveau projet` remet le contexte de travail à zéro mais ne supprime pas le setup Auto global. Une TestSession doit être fermée avant changement de projet.
-
-## 13. Architecture
-
-```text
-clipboard_agent/
-  app.py              UI + orchestration
-  protocol.py         parser/formatter protocole
-  models.py           modèles typés
-  state_machine.py    machine Agent Auto
-  workspace.py        binding Z-order/workspaces LLM/Target
-  test_session.py     TestSession persistante
-  target_session.py   TEMP_TEST temporaire / compatibilité V1
-  win32_input.py      Win32 mouse/keyboard/window/capture
-  execution.py        commandes/processus
-  visual_watch.py     mouvement/stabilité
-  visual_match.py     détection Copier
-  security.py         classification
-  redaction.py        secrets
-  storage.py          settings
-  prompt_builder.py   instructions LLM
-```
-
-## 14. Machine d’état
-
-Voir `STATE_MACHINE.md`. Les transitions sont typées et les transitions impossibles lèvent une erreur fail-safe.
-
-## 15. Tests / critères de recette
-
-Obligatoires :
-
-- parser de toutes les directives ;
-- anti-doublon/reprise ;
-- machine d’état ;
-- persistance settings ;
-- clipboard ;
-- timings ;
-- matching visuel ;
-- workspaces Z-order/focus ;
-- TestSession open→actions→close avec même processus ;
-- checkpoints et screenshot markers ;
-- `TEMP_TEST` + ancien format temporaire V1 non régressés ;
-- intervention souris ;
-- redaction ;
-- démarrage interface Tk ;
-- compilation Python ;
-- scripts Bash ;
-- archive de distribution réextraite/retestée.
-
-La validation Windows physique (`SendInput`, hook global, GDI/Z-order sur bureau interactif) doit être rejouée sur une vraie session Windows ; la CI non interactive ne peut pas la remplacer.
-
-## 16. Hors périmètre actuel
-
-- DOM/endpoint privé du chat Web ;
-- OCR du chat ;
-- sandbox système complète ;
-- contrôle générique du bureau par le LLM ;
-- contournement de protections anti-bot ;
-- exécution parallèle de plusieurs TestSessions.
+Les extensions de profil doivent ajouter leurs propres tests sans affaiblir la suite générique.
