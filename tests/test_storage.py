@@ -60,6 +60,7 @@ def test_auto_settings_defaults_are_conservative():
     assert 0.5 <= settings.auto_copy_match_threshold <= 0.99
     assert settings.auto_delay_paste_to_send_seconds >= 0
     assert 0 <= settings.auto_timing_jitter_percent <= 50
+    assert settings.auto_repair_self is False
 
 
 def test_settings_store_roundtrip_complete_auto_configuration(tmp_path):
@@ -67,6 +68,7 @@ def test_settings_store_roundtrip_complete_auto_configuration(tmp_path):
     settings = Settings(
         project_root=r"C:\\work\\demo",
         goal="Build the demo",
+        auto_repair_self=True,
         auto_prompt_x=101,
         auto_prompt_y=202,
         auto_send_x=303,
@@ -98,6 +100,7 @@ def test_settings_store_roundtrip_complete_auto_configuration(tmp_path):
 
     loaded = store.load()
     assert loaded == settings
+    assert loaded.auto_repair_self is True
     assert loaded.auto_configured
 
 
@@ -151,6 +154,7 @@ def test_legacy_timing_profile_is_migrated_to_relaxed_defaults(tmp_path):
     }), encoding="utf-8")
     loaded = store.load()
     assert loaded.timing_profile_version == 2
+    assert loaded.auto_repair_self is False
     assert loaded.auto_target_window_timeout_seconds >= 60.0
     assert loaded.auto_target_launch_settle_seconds >= 2.0
     assert loaded.auto_test_ready_stable_seconds >= 3.0

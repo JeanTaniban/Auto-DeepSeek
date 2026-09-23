@@ -12,6 +12,7 @@ class Settings:
     shell: str = "powershell"
     profile_id: str = "generic"
     auto_run_low_risk: bool = True
+    auto_repair_self: bool = False
     goal_reminder_every: int = 4
     max_output_chars: int = 100_000
     timing_profile_version: int = 2
