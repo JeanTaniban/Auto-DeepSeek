@@ -1,6 +1,6 @@
 # Cahier des charges — Auto-DeepSeek / Clipboard Agent Relay
 
-**Version : 2.15**
+**Version : 2.16**
 **Cible principale : Windows 10/11, Python 3.11+**
 
 ## 1. Objectif
@@ -13,6 +13,7 @@ Le navigateur n’est pas piloté par DOM/API privée. Les interfaces locales re
 
 - `CDC_PROFILES_UNITY.md` — architecture générique des profils et spécification du premier profil métier Unity.
 - `MISSION_AUTO_TESTSESSION.md` — mission V2.15 de cycle de vie TestSession autonome et capture cible fiable.
+- `MISSION_AUTO_REPAIR_SELF.md` — mission V2.16 de récupération autonome des erreurs système transitoires du Relay.
 
 ## 2. Destination Goal
 
@@ -39,6 +40,24 @@ Sous Windows, le Relay :
 9. répète.
 
 Le mode Auto prend aussi en charge le ménage de cycle de vie des TestSessions. Le LLM exprime l’intention utile ; une session persistante précédente ne doit pas imposer un tour de protocole artificiel uniquement pour être fermée.
+
+### Auto repair self
+
+Une option persistante `Auto repair self` rend la boucle Auto tolérante à certaines erreurs locales transitoires du Relay.
+
+Lorsqu’elle est activée, un défaut classé **récupérable** ne doit plus immédiatement laisser Agent Auto arrêté/figé. Le Relay :
+
+1. annule ses timers Auto devenus obsolètes ;
+2. vérifie qu’aucune opération locale concurrente ne reste active ;
+3. passe dans `RECOVERING_SYSTEM_ERROR` ;
+4. construit un résultat `#RelayResult` avec `Kind: SYSTEM_ERROR` ;
+5. décrit l’erreur, son code et l’état Auto courant ;
+6. renvoie ce résultat au LLM ;
+7. reprend le cycle normal à partir de la prochaine directive du LLM.
+
+Cette récupération est **bornée** : maximum 3 erreurs système auto-réparées dans une fenêtre glissante de 120 s. Un échec pendant la transmission du message de récupération lui-même devient fail-stop.
+
+Le mode ne s’applique jamais aux arrêts normaux, violations de sécurité, incohérences internes de machine d’état, intervention physique utilisateur, opération locale encore active ni perte du canal nécessaire pour joindre le LLM.
 
 ## 4. Fenêtres déterministes
 
@@ -139,6 +158,28 @@ En **Agent Auto**, le cycle de vie est intent-based :
 
 Une opération concurrente réellement encore en cours, une restauration LLM impossible ou une intervention physique de l’utilisateur restent des conditions fail-safe et peuvent interrompre Auto.
 
+### 5.4 Résultat `SYSTEM_ERROR`
+
+Avec `Auto repair self`, une erreur locale récupérable utilise le même canal de résultat :
+
+```text
+#RelayResult
+Protocol: 2
+Kind: SYSTEM_ERROR
+ID: system-...
+Status: ERROR
+Severity: RECOVERABLE
+Source: RELAY
+AutoRepairSelf: ACTIVE
+AutoState: ...
+Code: ...
+RecoveryAttempt: ...
+Description: ...
+Instruction: ...
+```
+
+Le LLM doit interpréter ce message comme un incident du Relay/hôte, pas comme un échec métier du projet. Il peut répondre avec une nouvelle directive `#Relay` normale pour réessayer, diagnostiquer ou contourner le défaut. Il ne doit jamais contourner une politique `BLOCKED`, une demande d’intervention utilisateur ou une condition de sécurité.
+
 ## 6. Readiness TestSession
 
 Modes :
@@ -208,6 +249,8 @@ Une variation bornée des délais UI peut être configurée pour absorber des la
 - commande shell classée LOW/MODIFY/SENSITIVE/BLOCKED ;
 - SENSITIVE → validation/pause ;
 - BLOCKED → refus ;
+- `Auto repair self` ne transforme jamais `BLOCKED`, `SENSITIVE`, intervention physique, perte du workspace LLM ou violation de machine d’état en reprise automatique ;
+- `Auto repair self` possède un budget anti-boucle borné et un échec de sa propre transmission est fatal ;
 - Target limitée au PID lancé/descendants ;
 - raccourcis globaux Windows interdits ;
 - `#TypeInput` conserve l'Unicode complet ; un `#Key` caractère simple utilise le layout clavier du thread de `TARGET_WINDOW` via `VkKeyScanExW` (avec fallback Unicode lorsque nécessaire) ;
@@ -229,7 +272,9 @@ Une variation bornée des délais UI peut être configurée pour absorber des la
 
 Configuration : `~/.clipboard_agent_relay/settings.json`.
 
-Persistants notamment : Goal/projet, setup Auto, template Copier, timings, seuils.
+Persistants notamment : Goal/projet, setup Auto, template Copier, timings, seuils, profil actif et booléen `auto_repair_self`.
+
+`auto_repair_self` vaut `false` par défaut afin de préserver le comportement historique lors d’une mise à jour.
 
 `Nouveau projet` remet le contexte de travail à zéro mais ne supprime pas le setup Auto global. Une TestSession doit être fermée avant changement de projet manuel ; en Agent Auto, la réconciliation de session est gérée par le Relay entre directives.
 
@@ -238,7 +283,8 @@ Persistants notamment : Goal/projet, setup Auto, template Copier, timings, seuil
 ```text
 clipboard_agent/
   app.py                  UI + orchestration compatible
-  profiled_app.py         couche active profils + cycle TestSession Auto
+  profiled_app.py         couche active profils + cycle TestSession Auto + Auto repair self
+  auto_repair.py          classification/formatage des erreurs système récupérables
   managed_test_session.py capture/readiness persistante réconciliée
   protocol.py             parser/formatter protocole
   models.py               modèles typés
@@ -260,6 +306,8 @@ clipboard_agent/
 
 Voir `STATE_MACHINE.md`. Les transitions sont typées et les transitions impossibles lèvent une erreur fail-safe.
 
+Avec `Auto repair self`, tout état Auto actif admissible peut rejoindre `RECOVERING_SYSTEM_ERROR`; cet état ne peut ensuite aller que vers `SENDING`, `PAUSED` ou `OFF`.
+
 ## 15. Tests / critères de recette
 
 Obligatoires :
@@ -268,6 +316,11 @@ Obligatoires :
 - anti-doublon/reprise ;
 - machine d’état ;
 - persistance settings ;
+- `Auto repair self` : option désactivée = arrêt historique ;
+- `Auto repair self` : défaut récupérable = `SYSTEM_ERROR` puis retour `SENDING` ;
+- `Auto repair self` : erreurs fatales/sécurité/concurrence/workspace LLM = arrêt ;
+- `Auto repair self` : anti-boucle et échec pendant récupération = arrêt ;
+- prompt système d’auto-réparation seulement quand l’option est activée ;
 - clipboard ;
 - timings ;
 - matching visuel ;
