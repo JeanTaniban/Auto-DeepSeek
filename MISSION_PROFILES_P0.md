@@ -38,3 +38,16 @@ Introduire le socle générique de profils sans ajouter de logique Unity et sans
 ## Gate de fin P0
 
 P0 n’est intégrable que si le diff ne contient aucune logique Unity, si la suite V2.14 reste verte et si le profil générique est le seul profil enregistré par défaut.
+
+## Validation P0
+
+- `clipboard_agent/profiles/` introduit les modèles de détection/health/état, `AgentProfile`, `ProfileRegistry`, `ProfileManager` et `GenericProfile`.
+- Le registre livré par défaut contient uniquement `generic` / `Développement général`.
+- `GenericProfile.build_initial_prompt()` délègue au builder V2.14 existant ; un test vérifie l’égalité exacte du prompt produit.
+- `Settings.profile_id` vaut `generic` par défaut ; les anciens fichiers de réglages sans ce champ restent compatibles et les valeurs futures sont persistées sans perte.
+- Le point d’entrée normal `main.py` lance une couche `ProfiledClipboardAgentApp` qui conserve `ClipboardAgentApp` V2.14 intact et ajoute le sélecteur de profil.
+- Le changement de profil est refusé pendant Agent Auto, une commande, une Target App ou toute TestSession non `CLOSED`.
+- Un ID de profil persistant mais indisponible retombe explicitement sur `generic` au démarrage.
+- Aucun `Action: TOOL`, aucun provider Unity et aucune logique Unity n’ont été ajoutés en P0.
+- Une première CI a échoué à cause d’un faux objet de test qui n’exposait pas `_ensure_profile_manager`; le runtime compilait. Le harness a été corrigé, ainsi qu’un avertissement de collecte pytest.
+- Après correction, la matrice GitHub Actions Ubuntu/Windows × Python 3.11/3.12 est entièrement verte avant la passe documentaire finale.
