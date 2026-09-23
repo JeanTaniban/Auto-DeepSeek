@@ -8,7 +8,7 @@ from collections import deque
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from .app import ClipboardAgentApp, PURPLE, WARNING
+from .app import ClipboardAgentApp, WARNING
 from .auto_repair import (
     AUTO_REPAIR_MAX_EVENTS,
     AUTO_REPAIR_WINDOW_SECONDS,
@@ -200,12 +200,17 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
         events.append(now)
         return len(events)
 
+    def _hard_stop_auto(self, reason: str, *, set_status: bool = True) -> None:
+        """Stop Auto and clear transient self-repair state for a later manual restart."""
+        self._auto_repair_inflight = False
+        super()._stop_auto(reason, set_status=set_status)
+
     def _stop_auto(self, reason: str, *, set_status: bool = True) -> None:
         enabled = bool(getattr(self, "auto_enabled", False))
         paused = bool(getattr(self, "auto_paused", False))
         setting_enabled = bool(getattr(getattr(self, "settings", None), "auto_repair_self", False))
         if not setting_enabled or not enabled or paused:
-            super()._stop_auto(reason, set_status=set_status)
+            self._hard_stop_auto(reason, set_status=set_status)
             return
 
         decision = classify_auto_stop(
@@ -215,7 +220,7 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
             recovery_inflight=bool(getattr(self, "_auto_repair_inflight", False)),
         )
         if decision.disposition != AutoRepairDisposition.RECOVERABLE:
-            super()._stop_auto(reason, set_status=set_status)
+            self._hard_stop_auto(reason, set_status=set_status)
             return
 
         self._begin_auto_self_repair(reason, code=decision.code)
@@ -227,7 +232,7 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
 
         attempt = self._auto_repair_attempt(time.monotonic())
         if attempt is None:
-            super()._stop_auto(
+            self._hard_stop_auto(
                 f"Auto repair self arrêté : plus de {AUTO_REPAIR_MAX_EVENTS} erreurs système en "
                 f"{int(AUTO_REPAIR_WINDOW_SECONDS)} s. Dernière erreur : {reason}"
             )
@@ -241,8 +246,7 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
         try:
             self.auto_machine.transition(AutoState.RECOVERING_SYSTEM_ERROR)
         except AutoTransitionError as exc:
-            self._auto_repair_inflight = False
-            super()._stop_auto(f"Auto repair self impossible : {exc}. Erreur initiale : {reason}")
+            self._hard_stop_auto(f"Auto repair self impossible : {exc}. Erreur initiale : {reason}")
             return
 
         event_id = f"system-{time.time_ns()}"
@@ -268,8 +272,7 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
             lambda message=text: self._auto_send_message(message),
         )
         if job is None:
-            self._auto_repair_inflight = False
-            super()._stop_auto(
+            self._hard_stop_auto(
                 "Auto repair self n'a pas pu programmer le renvoi SYSTEM_ERROR ; reprise automatique abandonnée."
             )
 
