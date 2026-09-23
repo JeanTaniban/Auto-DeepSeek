@@ -11,7 +11,7 @@ from .cli import UnityCliRunner
 from .compiler import CompileOutcome, UnityCompileCoordinator
 from .discovery import read_unity_project
 from .prompt import build_unity_prompt_suffix
-from .state import CompletionBarrier, UnityProfileState
+from .state import CompletionBarrier, UnityProfileState, UnityStateMachine
 from .visual import UnityVisualRouter, VisualCaptureError, VisualIntent
 
 
@@ -19,8 +19,8 @@ class UnityProfile(AgentProfile):
     _metadata = ProfileMetadata(
         profile_id="unity",
         display_name="Unity",
-        version="0.1",
-        description="Profil Unity CLI/Pipeline orienté compilation et preuves visuelles.",
+        version="0.2",
+        description="Profil Unity CLI/Pipeline orienté états métier, compilation et preuves visuelles.",
     )
 
     def __init__(
@@ -32,11 +32,15 @@ class UnityProfile(AgentProfile):
         self.cli = cli or UnityCliRunner()
         self.compiler = UnityCompileCoordinator(self.cli)
         self.visual_router = visual_router or UnityVisualRouter()
-        self._state = UnityProfileState.UNINITIALIZED
+        self._machine = UnityStateMachine()
 
     @property
     def metadata(self) -> ProfileMetadata:
         return self._metadata
+
+    @property
+    def unity_state(self) -> UnityProfileState:
+        return self._machine.state
 
     def detect_project(self, project_root: Path) -> DetectionResult:
         info = read_unity_project(project_root)
@@ -57,10 +61,11 @@ class UnityProfile(AgentProfile):
 
     def health_check(self, project_root: Path, *, deep: bool = False) -> HealthReport:
         del deep
+        self._machine.transition(UnityProfileState.CHECKING)
         checks: list[HealthCheck] = []
         info = read_unity_project(project_root)
         if info is None:
-            self._state = UnityProfileState.ERROR
+            self._machine.transition(UnityProfileState.ERROR)
             return HealthReport((
                 HealthCheck(
                     check_id="unity-project",
@@ -75,7 +80,7 @@ class UnityProfile(AgentProfile):
             details={"version": info.version},
         ))
         if not self.cli.available():
-            self._state = UnityProfileState.USER_ACTION_REQUIRED
+            self._machine.transition(UnityProfileState.USER_ACTION_REQUIRED)
             checks.append(HealthCheck(
                 check_id="unity-cli",
                 status=HealthStatus.USER_ACTION_REQUIRED,
@@ -89,25 +94,47 @@ class UnityProfile(AgentProfile):
             status=HealthStatus.PASS,
             message="Unity CLI disponible.",
         ))
-        self._state = UnityProfileState.READY
+        self._machine.transition(UnityProfileState.READY)
         return HealthReport(tuple(checks))
+
+    def prepare_tool(self, request: ToolRequest, project_root: Path) -> None:
+        if request.tool_id == "unity.health":
+            return
+        if self._machine.state == UnityProfileState.UNINITIALIZED:
+            self.health_check(project_root)
 
     def current_state(self) -> ProfileState:
         mapping = {
             UnityProfileState.UNINITIALIZED: ProfileState.UNINITIALIZED,
-            UnityProfileState.CHECKING: ProfileState.BUSY,
             UnityProfileState.READY: ProfileState.READY,
             UnityProfileState.EDITOR_READY: ProfileState.READY,
             UnityProfileState.USER_ACTION_REQUIRED: ProfileState.USER_ACTION_REQUIRED,
             UnityProfileState.DEGRADED: ProfileState.DEGRADED,
             UnityProfileState.ERROR: ProfileState.ERROR,
         }
-        return mapping.get(self._state, ProfileState.BUSY)
+        return mapping.get(self._machine.state, ProfileState.BUSY)
 
     def tool_descriptors(self, project_root: Path) -> tuple[ToolDescriptor, ...]:
         if read_unity_project(project_root) is None:
             return ()
         return (
+            ToolDescriptor(
+                tool_id="unity.health",
+                provider="unity-profile",
+                description="Revérifie le projet et Unity CLI et tente une récupération d'état explicite.",
+                nature=ToolNature.READ,
+                risk=RiskLevel.LOW,
+                allowed_states=(
+                    ProfileState.UNINITIALIZED,
+                    ProfileState.READY,
+                    ProfileState.USER_ACTION_REQUIRED,
+                    ProfileState.DEGRADED,
+                    ProfileState.ERROR,
+                ),
+                timeout=30,
+                completion_barrier=CompletionBarrier.NONE.value,
+                idempotent=True,
+            ),
             ToolDescriptor(
                 tool_id="unity.recompile",
                 provider="unity-cli",
@@ -131,6 +158,32 @@ class UnityProfile(AgentProfile):
             ),
         )
 
+    def _ensure_tool_ready(self, request: ToolRequest, project_root: Path) -> None:
+        self.prepare_tool(request, project_root)
+        state = self.current_state()
+        if state != ProfileState.READY:
+            raise ToolExecutionError(
+                f"Unity n'est pas prêt pour {request.tool_id!r} : état {state.value} "
+                f"(Unity={self._machine.state.value})."
+            )
+
+    @staticmethod
+    def _health_data(report: HealthReport, unity_state: UnityProfileState) -> dict[str, object]:
+        return {
+            "overall": report.overall.value,
+            "unityState": unity_state.value,
+            "checks": [
+                {
+                    "id": check.check_id,
+                    "status": check.status.value,
+                    "message": check.message,
+                    "remediation": check.remediation,
+                    "details": check.details,
+                }
+                for check in report.checks
+            ],
+        }
+
     def execute_tool(self, request: ToolRequest, project_root: Path) -> ToolResult:
         if request.profile_id != self.metadata.profile_id:
             raise ToolExecutionError(
@@ -138,10 +191,35 @@ class UnityProfile(AgentProfile):
             )
         if read_unity_project(project_root) is None:
             raise ToolExecutionError("La racine sélectionnée n'est pas un projet Unity valide.")
+
+        if request.tool_id == "unity.health":
+            report = self.health_check(project_root)
+            success = report.overall in {HealthStatus.PASS, HealthStatus.WARN}
+            return ToolResult(
+                request_id=request.request_id,
+                profile_id=self.metadata.profile_id,
+                provider=request.provider,
+                tool_id=request.tool_id,
+                status=ExecutionStatus.SUCCESS if success else ExecutionStatus.ERROR,
+                profile_state=self.current_state(),
+                data=self._health_data(report, self._machine.state),
+                recommended_next=("TOOL",) if success else ("TOOL", "END"),
+            )
+
+        self._ensure_tool_ready(request, project_root)
+
         if request.tool_id == "unity.recompile":
-            self._state = UnityProfileState.COMPILING
-            result = self.compiler.compile(project_root, timeout=request.timeout or 240)
-            self._state = result.state
+            if self._machine.state not in {UnityProfileState.READY, UnityProfileState.EDITOR_READY}:
+                raise ToolExecutionError(
+                    f"Recompilation interdite dans l'état Unity {self._machine.state.value}."
+                )
+            self._machine.transition(UnityProfileState.COMPILING)
+            try:
+                result = self.compiler.compile(project_root, timeout=request.timeout or 240)
+            except Exception:
+                self._machine.force_error()
+                raise
+            self._machine.transition(result.state)
             if result.outcome == CompileOutcome.SUCCESS:
                 status = ExecutionStatus.SUCCESS
             elif result.outcome == CompileOutcome.TIMEOUT:
@@ -158,6 +236,7 @@ class UnityProfile(AgentProfile):
                 data={
                     "outcome": result.outcome.value,
                     "barrier": result.barrier.value,
+                    "unityState": self._machine.state.value,
                     "compileErrors": list(result.errors),
                     "compileWarnings": list(result.warnings),
                 },
@@ -184,6 +263,7 @@ class UnityProfile(AgentProfile):
                     tool_id=request.tool_id,
                     status=ExecutionStatus.ERROR,
                     profile_state=self.current_state(),
+                    data={"unityState": self._machine.state.value},
                     errors=(str(exc),),
                     recommended_next=("TOOL",),
                 )
@@ -201,6 +281,7 @@ class UnityProfile(AgentProfile):
                     "fallbackUsed": evidence.fallback_used,
                     "occlusionSafe": evidence.occlusion_safe,
                     "frameStable": evidence.frame_stable,
+                    "unityState": self._machine.state.value,
                     "semantic": evidence.semantic_data,
                 },
                 warnings=evidence.warnings,
@@ -208,6 +289,9 @@ class UnityProfile(AgentProfile):
                 recommended_next=("TOOL", "EXECUTION"),
             )
         raise ToolExecutionError(f"Outil Unity non supporté : {request.tool_id}")
+
+    def shutdown(self) -> None:
+        self._machine.reset()
 
     def build_initial_prompt(
         self,

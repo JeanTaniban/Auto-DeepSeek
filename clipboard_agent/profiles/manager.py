@@ -69,6 +69,8 @@ class ProfileManager:
             raise ToolExecutionError(
                 f"Outil refusé : profil actif {self.active_profile_id!r}, requête pour {request.profile_id!r}."
             )
+
+        profile = self.active_profile
         available = {item.tool_id: item for item in self.tool_descriptors(project_root)}
         descriptor = available.get(request.tool_id)
         if descriptor is None:
@@ -79,4 +81,27 @@ class ProfileManager:
             raise ToolExecutionError(
                 f"Provider incohérent pour {request.tool_id!r} : attendu {descriptor.provider!r}, reçu {request.provider!r}."
             )
-        return self.active_profile.execute_tool(request, project_root)
+
+        profile.prepare_tool(request, project_root)
+
+        # Preparation can change health/capability state. Re-read the descriptor
+        # so a profile cannot execute a stale capability contract.
+        refreshed = {item.tool_id: item for item in self.tool_descriptors(project_root)}
+        descriptor = refreshed.get(request.tool_id)
+        if descriptor is None:
+            raise ToolExecutionError(
+                f"Outil {request.tool_id!r} devenu indisponible après préparation du profil."
+            )
+        if descriptor.provider != request.provider:
+            raise ToolExecutionError(
+                f"Provider incohérent après préparation pour {request.tool_id!r}."
+            )
+
+        state = profile.current_state()
+        if state not in descriptor.allowed_states:
+            allowed = ", ".join(item.value for item in descriptor.allowed_states) or "<aucun>"
+            raise ToolExecutionError(
+                f"Outil {request.tool_id!r} interdit dans l'état profil {state.value}; "
+                f"états autorisés : {allowed}."
+            )
+        return profile.execute_tool(request, project_root)

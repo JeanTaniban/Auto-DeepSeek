@@ -41,12 +41,22 @@ class AgentProfile(ABC):
     def tool_descriptors(self, project_root: Path) -> tuple[ToolDescriptor, ...]:
         """Return tools currently exposed by this profile.
 
-        P0/GenericProfile exposes no semantic tools. Specialized profiles can
-        opt in incrementally without forcing domain-specific code into the
-        generic Relay application.
+        GenericProfile exposes no semantic tools. Specialized profiles can opt
+        in incrementally without forcing domain-specific code into the generic
+        Relay application.
         """
         del project_root
         return ()
+
+    def prepare_tool(self, request: ToolRequest, project_root: Path) -> None:
+        """Bring the profile to a state where *request* may be validated.
+
+        The default is intentionally a no-op. Stateful profiles can use this
+        hook for safe autonomous preparation such as a lazy health check. It
+        must not execute the requested operation itself and must not bypass
+        USER_ACTION_REQUIRED or other safety states.
+        """
+        del request, project_root
 
     def execute_tool(self, request: ToolRequest, project_root: Path) -> ToolResult:
         del request, project_root

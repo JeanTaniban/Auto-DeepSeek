@@ -117,7 +117,7 @@ class ProfileToolHostMixin:
             self._set_status("OUTIL INVALIDE", str(exc), DANGER)
             return
 
-        if source_auto and not self._transition_auto(AutoState.EXECUTING):
+        if source_auto and not self._transition_auto(AutoState.PROFILE_TOOL_RUNNING):
             return
         self._append_terminal(
             f"\n[profile-tool] {request.profile_id}/{request.provider}/{request.tool_id} ID={request.request_id}\n",

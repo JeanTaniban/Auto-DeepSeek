@@ -88,11 +88,12 @@ def test_unity_health_requires_cli_but_keeps_project_diagnostic(tmp_path):
     assert profile.current_state() == ProfileState.USER_ACTION_REQUIRED
 
 
-def test_unity_profile_exposes_compile_and_visual_tools(tmp_path):
+def test_unity_profile_exposes_health_compile_and_visual_tools(tmp_path):
     root = _unity_project(tmp_path)
     profile = UnityProfile(cli=FakeCli())
     descriptors = {item.tool_id: item for item in profile.tool_descriptors(root)}
-    assert set(descriptors) == {"unity.recompile", "unity.observe"}
+    assert set(descriptors) == {"unity.health", "unity.recompile", "unity.observe"}
+    assert descriptors["unity.health"].provider == "unity-profile"
     assert descriptors["unity.recompile"].completion_barrier == "COMPILE_SETTLED"
     assert descriptors["unity.observe"].provider == "unity-visual"
 
@@ -163,6 +164,7 @@ def test_unity_profile_executes_recompile_as_domain_tool(tmp_path):
     assert result.status == ExecutionStatus.SUCCESS
     assert result.data["outcome"] == "SUCCESS"
     assert result.data["barrier"] == "COMPILE_SETTLED"
+    assert result.data["unityState"] == "EDITOR_READY"
 
 
 def test_unity_profile_preserves_recompile_timeout_status(tmp_path):
@@ -190,7 +192,7 @@ def test_unity_profile_preserves_recompile_timeout_status(tmp_path):
     assert cli.calls == [(root, 12)]
 
 
-def test_unity_prompt_keeps_llm_visual_contract_simple(tmp_path):
+def test_unity_prompt_keeps_llm_visual_and_state_contract_simple(tmp_path):
     root = _unity_project(tmp_path)
     prompt = UnityProfile(cli=FakeCli()).build_initial_prompt(
         root,
@@ -203,3 +205,5 @@ def test_unity_prompt_keeps_llm_visual_contract_simple(tmp_path):
     assert "GAME" in prompt and "SCENE" in prompt and "EDITOR" in prompt and "RUNTIME" in prompt
     assert "ne choisis jamais toi-même MCP/Win32/backend de capture" in prompt
     assert "n'utilise pas de délai arbitraire" in prompt
+    assert "unity.health" in prompt
+    assert "ne poll pas l'état Unity" in prompt
