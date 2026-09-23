@@ -5,6 +5,7 @@ from pathlib import Path
 from .base import AgentProfile
 from .models import DetectionResult
 from .registry import ProfileRegistry, ProfileRegistryError
+from .tools import ToolDescriptor, ToolExecutionError, ToolRequest, ToolResult
 
 
 class ProfileManager:
@@ -59,3 +60,23 @@ class ProfileManager:
         if matches:
             return matches[0][0]
         return self.registry.get(self.fallback_profile_id)
+
+    def tool_descriptors(self, project_root: Path) -> tuple[ToolDescriptor, ...]:
+        return self.active_profile.tool_descriptors(project_root)
+
+    def execute_tool(self, request: ToolRequest, project_root: Path) -> ToolResult:
+        if request.profile_id != self.active_profile_id:
+            raise ToolExecutionError(
+                f"Outil refusé : profil actif {self.active_profile_id!r}, requête pour {request.profile_id!r}."
+            )
+        available = {item.tool_id: item for item in self.tool_descriptors(project_root)}
+        descriptor = available.get(request.tool_id)
+        if descriptor is None:
+            raise ToolExecutionError(
+                f"Outil {request.tool_id!r} non disponible dans le profil {self.active_profile_id!r}."
+            )
+        if descriptor.provider != request.provider:
+            raise ToolExecutionError(
+                f"Provider incohérent pour {request.tool_id!r} : attendu {descriptor.provider!r}, reçu {request.provider!r}."
+            )
+        return self.active_profile.execute_tool(request, project_root)
