@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -70,11 +70,6 @@ class AgentDirective:
     summary: str = ""
     request_id: str = ""
     ready: str = "auto"
-    tool_profile: str = ""
-    tool_provider: str = ""
-    tool_id: str = ""
-    tool_arguments: dict[str, object] = field(default_factory=dict)
-    tool_timeout: int | None = None
 
 
 @dataclass(slots=True)
