@@ -2,31 +2,45 @@ from __future__ import annotations
 
 import os
 import platform
+import time
 import tkinter as tk
+from collections import deque
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from .app import ClipboardAgentApp
+from .app import ClipboardAgentApp, PURPLE, WARNING
+from .auto_repair import (
+    AUTO_REPAIR_MAX_EVENTS,
+    AUTO_REPAIR_WINDOW_SECONDS,
+    AutoRepairDisposition,
+    classify_auto_stop,
+    format_system_error_result,
+)
 from .managed_test_session import ManagedPersistentTestSession
 from .models import AgentDirective, ExecutionRequest, ExecutionStatus
 from .profile_tool_host import ProfileToolHostMixin
 from .profiles import ProfileManager, ProfileRegistryError, build_default_profile_registry
-from .state_machine import AutoState
+from .redaction import redact_secrets
+from .state_machine import AutoState, AutoTransitionError
 from .test_session import TestSessionResult, TestSessionState
 from .win32_input import enable_per_monitor_dpi_awareness
 
 
 class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
-    """ClipboardAgentApp with profile selection and managed TestSession lifecycle.
+    """ClipboardAgentApp with profiles, managed TestSession and self-repair policy.
 
     Profile-tool protocol/runtime glue is isolated in ProfileToolHostMixin and
-    concrete domain behavior remains inside profile packages.
+    concrete domain behavior remains inside profile packages. Auto repair self
+    adapts legacy `_stop_auto(reason)` call sites into a typed recovery policy
+    without weakening security or user-intervention fail-safes.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.test_session = ManagedPersistentTestSession(self.desktop, self.executor, self.workspace)
         self._init_profile_tool_host()
+        self._auto_repair_inflight = False
+        self._auto_repair_events: deque[float] = deque()
 
     def _ensure_profile_manager(self) -> ProfileManager:
         manager = getattr(self, "profile_manager", None)
@@ -56,17 +70,43 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
         ttk.Label(profile_row, textvariable=self.profile_status_var, style="Muted.TLabel").grid(row=0, column=2, sticky="e", padx=(12, 0))
         self._refresh_profile_status()
 
+        repair_row = ttk.Frame(project_panel, style="Panel.TFrame")
+        repair_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        repair_row.columnconfigure(1, weight=1)
+        self.auto_repair_self_var = tk.BooleanVar(value=bool(getattr(self.settings, "auto_repair_self", False)))
+        ttk.Checkbutton(
+            repair_row,
+            text="Auto repair self",
+            variable=self.auto_repair_self_var,
+            command=self._on_auto_repair_self_toggled,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            repair_row,
+            text="Erreur système récupérable → renvoi au LLM au lieu d'un arrêt Auto (sécurité/fatal inchangés).",
+            style="Muted.TLabel",
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+
     def _restore_settings(self) -> None:
         super()._restore_settings()
         manager = self._ensure_profile_manager()
         if hasattr(self, "profile_var"):
             self.profile_var.set(manager.active_profile.metadata.display_name)
+        if hasattr(self, "auto_repair_self_var"):
+            self.auto_repair_self_var.set(bool(getattr(self.settings, "auto_repair_self", False)))
         self._refresh_profile_status()
 
     def _save_settings(self) -> None:
         manager = self._ensure_profile_manager()
         self.settings.profile_id = manager.active_profile_id
+        if hasattr(self, "auto_repair_self_var"):
+            self.settings.auto_repair_self = bool(self.auto_repair_self_var.get())
         super()._save_settings()
+
+    def _on_auto_repair_self_toggled(self) -> None:
+        self.settings.auto_repair_self = bool(self.auto_repair_self_var.get())
+        self.store.save(self.settings)
+        state = "activé" if self.settings.auto_repair_self else "désactivé"
+        self._append_terminal(f"[auto-repair-self] {state}.\n", "info")
 
     def _profile_switch_blocked(self) -> bool:
         runner = getattr(self, "profile_tool_runner", None)
@@ -119,12 +159,125 @@ class ProfiledClipboardAgentApp(ProfileToolHostMixin, ClipboardAgentApp):
         root = self._project_root()
         shell = "powershell" if os.name == "nt" else "bash"
         manager = self._ensure_profile_manager()
-        return manager.active_profile.build_initial_prompt(
+        prompt = manager.active_profile.build_initial_prompt(
             root,
             self.goal_text.get("1.0", "end"),
             shell=shell,
             os_name=platform.system(),
         )
+        if bool(getattr(self.settings, "auto_repair_self", False)):
+            prompt += (
+                "\n\n## Auto repair self / SYSTEM_ERROR\n"
+                "Le Relay peut te renvoyer `#RelayResult` avec `Kind: SYSTEM_ERROR`. "
+                "C'est une erreur système locale du Relay, pas nécessairement une erreur du projet. "
+                "Lis `Code`, `AutoState` et `Description`, puis réponds avec exactement une directive `#Relay` normale "
+                "pour réessayer, diagnostiquer ou choisir une autre stratégie. "
+                "Ne contourne jamais une condition de sécurité, `BLOCKED`, ni une demande d'intervention utilisateur.\n"
+            )
+        return prompt
+
+    # ------------------------- Auto repair self -------------------------
+
+    def _auto_repair_local_busy(self) -> bool:
+        runner = getattr(self, "profile_tool_runner", None)
+        return bool(
+            getattr(getattr(self, "executor", None), "running", False)
+            or getattr(getattr(self, "target_runner", None), "running", False)
+            or getattr(getattr(self, "test_session", None), "busy", False)
+            or (runner is not None and runner.running)
+        )
+
+    def _auto_repair_attempt(self, now: float) -> int | None:
+        events = getattr(self, "_auto_repair_events", None)
+        if events is None:
+            events = deque()
+            self._auto_repair_events = events
+        cutoff = now - AUTO_REPAIR_WINDOW_SECONDS
+        while events and events[0] < cutoff:
+            events.popleft()
+        if len(events) >= AUTO_REPAIR_MAX_EVENTS:
+            return None
+        events.append(now)
+        return len(events)
+
+    def _stop_auto(self, reason: str, *, set_status: bool = True) -> None:
+        enabled = bool(getattr(self, "auto_enabled", False))
+        paused = bool(getattr(self, "auto_paused", False))
+        setting_enabled = bool(getattr(getattr(self, "settings", None), "auto_repair_self", False))
+        if not setting_enabled or not enabled or paused:
+            super()._stop_auto(reason, set_status=set_status)
+            return
+
+        decision = classify_auto_stop(
+            reason,
+            state=self.auto_state,
+            local_busy=self._auto_repair_local_busy(),
+            recovery_inflight=bool(getattr(self, "_auto_repair_inflight", False)),
+        )
+        if decision.disposition != AutoRepairDisposition.RECOVERABLE:
+            super()._stop_auto(reason, set_status=set_status)
+            return
+
+        self._begin_auto_self_repair(reason, code=decision.code)
+
+    def _begin_auto_self_repair(self, reason: str, *, code: str) -> None:
+        if self.user_intervention.is_set():
+            self._pause_auto("Intervention utilisateur détectée pendant une tentative Auto repair self.")
+            return
+
+        attempt = self._auto_repair_attempt(time.monotonic())
+        if attempt is None:
+            super()._stop_auto(
+                f"Auto repair self arrêté : plus de {AUTO_REPAIR_MAX_EVENTS} erreurs système en "
+                f"{int(AUTO_REPAIR_WINDOW_SECONDS)} s. Dernière erreur : {reason}"
+            )
+            return
+
+        previous_state = self.auto_state
+        self._auto_repair_inflight = True
+        self._cancel_auto_jobs()
+        self.auto_visual_tracker = None
+        self.auto_pending_attachment = None
+        try:
+            self.auto_machine.transition(AutoState.RECOVERING_SYSTEM_ERROR)
+        except AutoTransitionError as exc:
+            self._auto_repair_inflight = False
+            super()._stop_auto(f"Auto repair self impossible : {exc}. Erreur initiale : {reason}")
+            return
+
+        event_id = f"system-{time.time_ns()}"
+        description = redact_secrets(str(reason))
+        text = format_system_error_result(
+            event_id=event_id,
+            auto_state=previous_state,
+            code=code,
+            description=description,
+            attempt=attempt,
+        )
+        self._append_terminal(
+            f"[auto-repair-self] {code} depuis {previous_state.value} — tentative {attempt}/{AUTO_REPAIR_MAX_EVENTS}: {description}\n",
+            "stderr",
+        )
+        self._set_status(
+            "AUTO SELF-REPAIR",
+            "Erreur système récupérable : renvoi du diagnostic au LLM…",
+            WARNING,
+        )
+        job = self._schedule_auto_action(
+            "auto_delay_result_to_send_seconds",
+            lambda message=text: self._auto_send_message(message),
+        )
+        if job is None:
+            self._auto_repair_inflight = False
+            super()._stop_auto(
+                "Auto repair self n'a pas pu programmer le renvoi SYSTEM_ERROR ; reprise automatique abandonnée."
+            )
+
+    def _auto_accept_copied_text(self, text: str) -> None:
+        if bool(getattr(self, "_auto_repair_inflight", False)):
+            self._auto_repair_inflight = False
+            self._append_terminal("[auto-repair-self] Réponse LLM reçue après SYSTEM_ERROR ; contrôle rendu à la boucle normale.\n", "info")
+        super()._auto_accept_copied_text(text)
 
     # ------------------------- managed TestSession -------------------------
 
