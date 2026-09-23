@@ -10,6 +10,7 @@ class Settings:
     project_root: str = ""
     goal: str = ""
     shell: str = "powershell"
+    profile_id: str = "generic"
     auto_run_low_risk: bool = True
     goal_reminder_every: int = 4
     max_output_chars: int = 100_000
